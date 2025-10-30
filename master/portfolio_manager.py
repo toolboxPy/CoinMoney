@@ -4,11 +4,10 @@
 [핵심 기능]
 1. 전체 시장 스캔 (모든 KRW 코인)
 2. 거래량 급증 코인 발굴
-3. 🤖 AI 토론: 코인 선택 + 배분 비율 결정
-4. 🧬 압축 언어 (동적 진화): 토큰 절약
-5. 💳 크레딧 시스템: 무분별한 AI 호출 방지
-6. 동적 자금 배분 (좋은 코인에 더 많이)
-7. 포트폴리오 리밸런싱
+3. 🤖 AI 자문: 코인 선택 + 배분 비율 결정
+4. 💳 크레딧 시스템: 무분별한 AI 호출 방지
+5. 동적 자금 배분 (좋은 코인에 더 많이)
+6. 포트폴리오 리밸런싱
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 import pyupbit
@@ -22,7 +21,6 @@ from analysis.technical import technical_analyzer
 # 🔥 AI 시스템 임포트
 try:
     from ai.credit_system import credit_system
-    from ai.multi_ai_debate_dynamic import DynamicAIDebate
     AI_AVAILABLE = True
     info("✅ AI 포트폴리오 시스템 활성화")
 except ImportError as e:
@@ -36,8 +34,7 @@ class PortfolioManager:
     AI 통합 포트폴리오 매니저
 
     - 전체 시장 분석
-    - AI 토론: 코인 선택 + 배분
-    - 압축 언어 (동적 진화)
+    - AI 자문: 코인 선택 + 배분
     - 크레딧 관리
     """
 
@@ -77,16 +74,6 @@ class PortfolioManager:
             'KRW-USDT', 'KRW-USDC', 'KRW-DAI',  # 스테이블
             'KRW-WBTC', 'KRW-WEMIX',  # 래핑
         ]
-
-        # 🤖 AI 시스템
-        if AI_AVAILABLE:
-            self.ai_debate = DynamicAIDebate(
-                interval=timedelta(minutes=30),
-                rounds=3  # 포트폴리오 선택: 3라운드 토론
-            )
-            info("🤖 AI 토론 시스템 연결 완료 (압축 언어 활성화)")
-        else:
-            self.ai_debate = None
 
         info("💼 포트폴리오 매니저 초기화 완료")
         info(f"   총 예산: {self.total_budget:,}원")
@@ -296,7 +283,7 @@ class PortfolioManager:
 
     async def ai_select_portfolio(self, top_10_candidates):
         """
-        🤖 AI가 포트폴리오 선택 (압축 언어 + 토론)
+        🤖 AI가 포트폴리오 선택
 
         Args:
             top_10_candidates: 상위 10개 후보
@@ -312,8 +299,7 @@ class PortfolioManager:
                     ...
                 ],
                 'ai_confidence': 0.85,
-                'reasoning': '전체 전략...',
-                'protocol_version': 'v1.2'
+                'reasoning': '전체 전략...'
             }
         """
         try:
@@ -322,32 +308,29 @@ class PortfolioManager:
             info("=" * 60)
 
             # 1. 크레딧 체크
-            if not credit_system.can_use('debate'):
+            if not credit_system.can_use('single_ai'):
                 warning("⚠️ AI 크레딧 부족! 기본 알고리즘 사용")
                 return self._default_ai_selection(top_10_candidates)
 
-            # 2. 프롬프트 작성 (압축 언어 사용)
+            # 2. 프롬프트 작성
             prompt = self._build_ai_prompt(top_10_candidates)
 
-            # 3. AI 토론 실행 (압축 언어 + 진화)
-            info(f"💬 AI 토론 시작 (3 라운드, 압축 언어 활성화)")
-            info(f"💳 크레딧 소비: 3 (토론 2 + 진화 체크 1)")
+            # 3. AI 호출 (간단한 버전)
+            info(f"🤖 AI 자문 중...")
+            info(f"💳 크레딧 소비: 1")
 
-            credit_system.use_credit('debate', '포트폴리오 선택 토론')
+            credit_system.use_credit('single_ai', '포트폴리오 선택')
 
-            debate_result = await self.ai_debate.start_debate(
-                topic=f"포트폴리오 선택 (예산: {self.total_budget:,}원)",
-                context=prompt,
-                num_rounds=3
-            )
+            # 단순 AI 호출
+            ai_response_text = await self._call_ai(prompt)
 
-            if not debate_result or not debate_result.get('consensus'):
-                warning("⚠️ AI 토론 실패")
+            if not ai_response_text:
+                warning("⚠️ AI 응답 없음")
                 return self._default_ai_selection(top_10_candidates)
 
             # 4. 결과 파싱
             ai_response = self._parse_ai_response(
-                debate_result['consensus'],
+                ai_response_text,
                 top_10_candidates
             )
 
@@ -355,7 +338,6 @@ class PortfolioManager:
             info(f"\n✅ AI 선택 완료!")
             info(f"   선택: {len(ai_response['selected'])}개 코인")
             info(f"   신뢰도: {ai_response['ai_confidence'] * 100:.0f}%")
-            info(f"   프로토콜: {ai_response.get('protocol_version', 'v1.0')}")
             info(f"   남은 크레딧: {credit_system.get_remaining()}/{credit_system.daily_limit}")
 
             for coin in ai_response['selected']:
@@ -371,82 +353,109 @@ class PortfolioManager:
             error(traceback.format_exc())
             return self._default_ai_selection(top_10_candidates)
 
-    def _build_ai_prompt(self, candidates):
-        """AI 프롬프트 작성 (압축 언어 버전)"""
+    async def _call_ai(self, prompt):
+        """
+        AI 호출 (단순 버전)
 
-        # 후보 요약 (압축)
+        Args:
+            prompt: AI에게 보낼 프롬프트
+
+        Returns:
+            str: AI 응답
+        """
+        try:
+            # multi_ai_analyzer 사용
+            from ai.multi_ai_analyzer import multi_ai_analyzer
+
+            # 비동기 분석
+            result = await asyncio.to_thread(
+                multi_ai_analyzer.analyze_sync,
+                ticker="PORTFOLIO",
+                question=prompt
+            )
+
+            if result and result.get('analysis'):
+                return result['analysis']
+
+            return None
+
+        except Exception as e:
+            error(f"❌ AI 호출 오류: {e}")
+            return None
+
+    def _build_ai_prompt(self, candidates):
+        """AI 프롬프트 작성"""
+
+        # 후보 요약
         candidates_text = "\n".join([
-            f"{i+1}. {c['ticker']}: S={c['score']:.1f} "
-            f"V24={c['volume_24h']/1e9:.1f}B Δ24={c['change_24h']:+.1f}% "
-            f"T={c['technical_score']:.1f} M={c['momentum']}"
+            f"{i+1}. {c['ticker']}: Score={c['score']:.1f} "
+            f"Vol24h={c['volume_24h']/1e9:.1f}B Change24h={c['change_24h']:+.1f}% "
+            f"Tech={c['technical_score']:.1f} Momentum={c['momentum']}"
             for i, c in enumerate(candidates)
         ])
 
         prompt = f"""
-TASK: Select 3-5 coins from top 10 for portfolio (Budget: {self.total_budget:,} KRW)
+You are a crypto portfolio manager. Select 3-5 coins from these top 10 candidates.
+
+Budget: {self.total_budget:,} KRW
+Goal: Maximize profit with risk diversification
 
 CANDIDATES:
 {candidates_text}
 
 REQUIREMENTS:
 1. Choose 3-5 coins
-2. Allocate % (total=100%)
-3. Risk diversification
-4. Max profit potential
+2. Allocate percentage (total must be 100%)
+3. Provide brief reasoning for each
 
-OUTPUT (JSON only):
+OUTPUT FORMAT (JSON only):
 {{
-  "sel": [
-    {{"tkr": "KRW-BTC", "pct": 0.4, "why": "reason"}},
+  "selected": [
+    {{"ticker": "KRW-BTC", "allocation": 0.4, "reasoning": "Market leader, stable"}},
+    {{"ticker": "KRW-ETH", "allocation": 0.3, "reasoning": "Strong fundamentals"}},
     ...
   ],
-  "strat": "overall strategy",
-  "conf": 0.85
+  "overall_strategy": "Brief strategy description",
+  "confidence": 0.85
 }}
 
-Use compressed language. Think step-by-step.
+Return ONLY the JSON. No explanation before or after.
 """
         return prompt
 
-    def _parse_ai_response(self, consensus_text, candidates):
+    def _parse_ai_response(self, response_text, candidates):
         """AI 응답 파싱"""
         try:
             # JSON 추출
-            start = consensus_text.find('{')
-            end = consensus_text.rfind('}') + 1
+            start = response_text.find('{')
+            end = response_text.rfind('}') + 1
 
             if start == -1 or end == 0:
                 warning("⚠️ JSON 형식 없음")
                 return self._default_ai_selection(candidates)
 
-            json_str = consensus_text[start:end]
+            json_str = response_text[start:end]
             data = json.loads(json_str)
 
-            # 압축 형식 지원
-            selected_key = 'sel' if 'sel' in data else 'selected'
-            strategy_key = 'strat' if 'strat' in data else 'strategy'
-            conf_key = 'conf' if 'conf' in data else 'confidence'
-
-            selected = data.get(selected_key, [])
+            selected = data.get('selected', [])
 
             if not selected:
                 warning("⚠️ 선택 코인 없음")
                 return self._default_ai_selection(candidates)
 
-            # 변환
+            # 결과 구성
             result = {
                 'selected': [],
-                'ai_confidence': data.get(conf_key, 0.7),
-                'reasoning': data.get(strategy_key, 'AI 포트폴리오 전략'),
-                'protocol_version': self.ai_debate.protocol.version
+                'ai_confidence': data.get('confidence', 0.7),
+                'reasoning': data.get('overall_strategy', 'AI 포트폴리오 전략')
             }
 
             total_allocation = 0.0
 
             for item in selected:
-                ticker = item.get('tkr') or item.get('ticker')
-                allocation = item.get('pct') or item.get('allocation', 0)
-                reasoning = item.get('why') or item.get('reasoning', '')
+                ticker = item.get('ticker')
+                allocation = item.get('allocation', 0)
+                reasoning = item.get('reasoning', '')
 
                 if ticker and allocation > 0:
                     result['selected'].append({
@@ -456,7 +465,7 @@ Use compressed language. Think step-by-step.
                     })
                     total_allocation += allocation
 
-            # 비율 정규화
+            # 비율 정규화 (합이 정확히 1.0이 되도록)
             if total_allocation > 0 and abs(total_allocation - 1.0) > 0.01:
                 for coin in result['selected']:
                     coin['allocation'] /= total_allocation
@@ -480,8 +489,7 @@ Use compressed language. Think step-by-step.
         result = {
             'selected': [],
             'ai_confidence': 0.6,
-            'reasoning': '기본 알고리즘: 점수 기반 상위 3개',
-            'protocol_version': 'v0.0 (No AI)'
+            'reasoning': '기본 알고리즘: 점수 기반 상위 3개'
         }
 
         for coin in top_3:
@@ -510,8 +518,7 @@ Use compressed language. Think step-by-step.
                     ...
                 },
                 'total_analyzed': 200,
-                'ai_used': True,
-                'protocol_version': 'v1.2'
+                'ai_used': True
             }
         """
         try:
@@ -526,8 +533,8 @@ Use compressed language. Think step-by-step.
                 error("❌ 유효한 후보 없음")
                 return None
 
-            # 2. AI 선택 (압축 언어 + 토론)
-            if AI_AVAILABLE and credit_system.get_remaining() >= 3:
+            # 2. AI 선택
+            if AI_AVAILABLE and credit_system.get_remaining() >= 1:
                 ai_result = await self.ai_select_portfolio(top_10)
             else:
                 warning("⚠️ AI 미사용 (크레딧 부족 또는 비활성)")
@@ -565,7 +572,6 @@ Use compressed language. Think step-by-step.
                 'total_analyzed': len(top_10),
                 'ai_used': AI_AVAILABLE,
                 'ai_confidence': ai_result.get('ai_confidence', 0),
-                'protocol_version': ai_result.get('protocol_version', 'v0.0'),
                 'reasoning': ai_result.get('reasoning', '')
             }
 
@@ -730,7 +736,6 @@ async def test_portfolio_manager():
         print(f"   AI 사용: {'✅' if result['ai_used'] else '❌'}")
         if result['ai_used']:
             print(f"   신뢰도: {result['ai_confidence'] * 100:.0f}%")
-            print(f"   프로토콜: {result['protocol_version']}")
     else:
         print("\n❌ 테스트 실패")
 
