@@ -1,12 +1,14 @@
 """
 현물 트레이더 (업비트)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-[v1.3 - 체결 감지 완벽 개선]
+[v1.3 - 체결 감지 완벽 + 포트폴리오]
 - trades 배열로 체결 여부 정확히 판단
 - state='wait'여도 trades 있으면 체결 인정
 - 부분 체결 처리 추가
 - 취소된 주문도 체결된 부분 처리
 - 대기 시간 10초로 연장
+- 최소 금액 자동 조정 (5,100원)
+- 포트폴리오 조회/출력 기능
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 import sys
@@ -742,6 +744,10 @@ class SpotTrader:
             error(f"❌ 잔고 조회 오류: {e}")
             return []
 
+    # ========================================
+    # 🔥 포트폴리오 기능
+    # ========================================
+
     def get_portfolio_summary(self):
         """
         포트폴리오 요약 (잔액 + 보유 자산)
@@ -821,17 +827,24 @@ class SpotTrader:
             error(f"❌ 포트폴리오 조회 오류: {e}")
             return None
 
+    def print_portfolio_simple(self):
+        """간단한 포트폴리오 (한 줄)"""
+        summary = self.get_portfolio_summary()
+        if summary:
+            pnl_emoji = "📈" if summary['total_pnl'] >= 0 else "📉"
+            info(f"💼 KRW: {summary['krw_balance']:,.0f}원 | 포지션: {len(summary['positions'])}개 | 총자산: {summary['total_assets']:,.0f}원 | {pnl_emoji} 손익: {summary['total_pnl']:+,.0f}원 ({summary['total_pnl_percent']:+.2f}%)")
+
     def print_portfolio(self):
-        """포트폴리오 요약 출력 (보기 좋게)"""
+        """포트폴리오 요약 출력 (상세)"""
         summary = self.get_portfolio_summary()
 
         if not summary:
             error("❌ 포트폴리오 조회 실패")
             return
 
-        info("\n" + "=" * 60)
+        info("\n" + "="*60)
         info("💼 포트폴리오 요약")
-        info("=" * 60)
+        info("="*60)
 
         # KRW 잔고
         info(f"💰 KRW 잔고: {summary['krw_balance']:,.0f}원")
@@ -839,7 +852,7 @@ class SpotTrader:
         # 보유 포지션
         if summary['positions']:
             info(f"\n📊 보유 포지션 ({len(summary['positions'])}개):")
-            info("-" * 60)
+            info("-"*60)
 
             for pos in summary['positions']:
                 coin_name = pos['coin'].replace('KRW-', '')
@@ -862,25 +875,25 @@ class SpotTrader:
             info("\n📦 보유 포지션: 없음")
 
         # 요약
-        info("-" * 60)
+        info("-"*60)
         info(f"💼 총 투자금: {summary['total_investment']:,.0f}원")
         info(f"💎 포지션 평가액: {summary['total_value']:,.0f}원")
 
         total_pnl_emoji = "📈" if summary['total_pnl'] >= 0 else "📉"
         total_pnl_sign = "+" if summary['total_pnl'] >= 0 else ""
-        info(
-            f"{total_pnl_emoji} 총 손익: {total_pnl_sign}{summary['total_pnl']:,.0f}원 ({total_pnl_sign}{summary['total_pnl_percent']:.2f}%)")
+        info(f"{total_pnl_emoji} 총 손익: {total_pnl_sign}{summary['total_pnl']:,.0f}원 ({total_pnl_sign}{summary['total_pnl_percent']:.2f}%)")
 
         info("")
         info(f"🏦 총 자산: {summary['total_assets']:,.0f}원")
-        info("=" * 60 + "\n")
+        info("="*60 + "\n")
+
 
 # 전역 인스턴스
 spot_trader = SpotTrader()
 
 # 사용 예시
 if __name__ == "__main__":
-    print("🧪 Spot Trader v1.3 테스트 (체결 감지 완벽)\n")
+    print("🧪 Spot Trader v1.3 테스트 (체결 감지 완벽 + 포트폴리오)\n")
 
     # 잔고 조회
     print("💰 잔고 조회:")
@@ -906,16 +919,11 @@ if __name__ == "__main__":
         position_size = spot_trader.calculate_position_size(krw_balance)
         print(f"\n📈 권장 포지션 크기: {position_size:,.0f}원")
 
-    # 현재 포지션 확인
-    print("\n📦 현재 포지션:")
-    positions = state_manager.get_all_positions('spot')
-    if positions:
-        for coin, pos in positions.items():
-            print(f"  {coin}: {pos['quantity']:.8f} @ {pos['entry_price']:,.0f}원")
-    else:
-        print("  없음")
+    # 포트폴리오 표시
+    print("\n" + "="*60)
+    spot_trader.print_portfolio()
 
-    print("\n" + "=" * 60)
+    print("\n" + "="*60)
     print("💡 실제 거래는 API 키 설정 후 가능합니다!")
     print("   .env 파일에 UPBIT_ACCESS_KEY와 UPBIT_SECRET_KEY를 입력하세요.")
     print("=" * 60)
