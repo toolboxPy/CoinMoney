@@ -191,7 +191,7 @@ class PortfolioManager:
 
     async def _analyze_coin(self, ticker):
         """
-        개별 코인 분석 (디버그 버전)
+        개별 코인 분석 (안전 버전)
 
         Args:
             ticker: 코인 티커 (예: 'KRW-BTC')
@@ -221,20 +221,18 @@ class PortfolioManager:
 
             if df is None or len(df) < 20:
                 if random.random() < 0.01:  # 1% 로그
-                    warning(f"[{ticker}] 차트 데이터 부족 (len={len(df) if df is not None else 0})")
+                    warning(f"[{ticker}] 차트 데이터 부족")
                 return None
 
             # 거래량 (24시간)
             volume_24h = df['value'].sum()
 
-            # 🔥 디버그: 거래량 출력 (처음 10개)
+            # 🔥 디버그: 거래량 출력 (5% 확률)
             if random.random() < 0.05:
                 info(f"[{ticker}] 거래량: {volume_24h:,.0f}원")
 
             # 🔥 완화: 100만원으로 낮춤
             if volume_24h < 1_000_000:
-                if random.random() < 0.01:
-                    warning(f"[{ticker}] 거래량 부족: {volume_24h:,.0f}원 < 1,000,000원")
                 return None
 
             # 거래량 비율
@@ -249,13 +247,22 @@ class PortfolioManager:
             # 변동성
             volatility = (df['high'] / df['low'] - 1).mean()
 
-            # 기술적 분석
-            technical = technical_analyzer.analyze(df)
-            technical_score = technical.get('score', 0)
-
-            # 🔥 디버그: 기술 점수 출력
-            if random.random() < 0.05:
-                info(f"[{ticker}] 기술점수: {technical_score:.1f}/5")
+            # 🔥 기술적 분석 (안전하게)
+            technical_score = 0
+            try:
+                technical = technical_analyzer.analyze(df)
+                if technical is None or not isinstance(technical, dict):
+                    technical_score = 0
+                    if random.random() < 0.05:
+                        warning(f"[{ticker}] 기술 분석 None 반환")
+                else:
+                    technical_score = technical.get('score', 0)
+                    if random.random() < 0.05:
+                        info(f"[{ticker}] 기술점수: {technical_score:.1f}/5")
+            except Exception as e:
+                technical_score = 0
+                if random.random() < 0.05:
+                    error(f"[{ticker}] 기술 분석 예외: {e}")
 
             # 모멘텀 판단
             if price_change_24h > 0.05:
@@ -269,14 +276,14 @@ class PortfolioManager:
             else:
                 momentum = 'STRONG_DOWN'
 
-            # 🔥 종합 점수 (0~100) - 더 관대하게
+            # 🔥 종합 점수 (0~100)
             score = 0.0
 
             # 1. 기술 점수 (30점)
             tech_points = technical_score * 6  # 5점 만점 → 30점
             score += tech_points
 
-            # 2. 거래량 (40점) - 더 관대하게
+            # 2. 거래량 (40점)
             if volume_24h > 100_000_000_000:  # 1000억+
                 vol_points = 40
             elif volume_24h > 50_000_000_000:  # 500억+
@@ -338,9 +345,9 @@ class PortfolioManager:
             }
 
         except Exception as e:
-            # 🔥 예외도 로깅 (1% 확률)
-            if random.random() < 0.01:
-                error(f"[{ticker}] 분석 예외: {type(e).__name__}: {e}")
+            # 🔥 예외도 로깅 (5% 확률)
+            if random.random() < 0.05:
+                error(f"[{ticker}] 분석 최종 예외: {type(e).__name__}: {e}")
             return None
 
     async def ai_select_portfolio(self, top_10_candidates):
