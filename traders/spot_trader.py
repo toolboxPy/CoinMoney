@@ -1,5 +1,12 @@
 """
 현물 트레이더 (업비트)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[핵심 수정]
+1. 주문 성공/실패 정확한 판단
+2. 체결 대기 로직 개선
+3. 디버그 로그 강화
+4. 예외 처리 개선
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 import sys
 import os
@@ -99,13 +106,14 @@ class SpotTrader:
 
         return position
 
-    def buy(self, coin, investment=None):
+    def buy(self, coin, investment=None, reason="매수"):
         """
-        매수 실행
+        매수 실행 (🔥 완전 수정!)
 
         Args:
             coin: "KRW-BTC"
             investment: 투자 금액 (None이면 자동 계산)
+            reason: 매수 사유
 
         Returns:
             dict: {
@@ -151,55 +159,107 @@ class SpotTrader:
             info(f"\n📈 매수 실행:")
             info(f"  코인: {coin}")
             info(f"  투자금: {investment:,.0f}원")
-            info(f"  가격: {current_price:,.0f}원")
-            info(f"  수량: {quantity:.8f}")
+            info(f"  예상가: {current_price:,.0f}원")
+            info(f"  예상 수량: {quantity:.8f}")
+            info(f"  사유: {reason}")
 
-            # 실제 매수 주문
+            # 🔥 실제 매수 주문
             order = self.upbit.buy_market_order(coin, investment)
 
-            if order:
-                # 주문 완료 대기
-                time.sleep(1)
+            # 🔥 주문 응답 체크
+            if order is None:
+                error("❌ 주문 실패 (order=None)")
+                return {'success': False, 'reason': 'Order response is None'}
 
-                # 평균 체결가 조회
-                filled = self._get_order_details(order['uuid'])
+            # 🔥 에러 체크
+            if 'error' in order:
+                error(f"❌ 주문 실패: {order['error'].get('message', 'Unknown error')}")
+                return {'success': False, 'reason': order['error'].get('message', 'Unknown')}
+
+            # 🔥 UUID 체크 (핵심!)
+            if 'uuid' not in order:
+                error(f"❌ 주문 응답에 uuid 없음: {order}")
+                return {'success': False, 'reason': 'No uuid in order response'}
+
+            order_uuid = order['uuid']
+            info(f"✅ 주문 접수 완료!")
+            info(f"  주문 ID: {order_uuid}")
+            info(f"  주문 상태: {order.get('state', 'N/A')}")
+
+            # 🔥 체결 대기 (최대 5초, 0.5초 간격)
+            info("⏳ 체결 확인 중...")
+            filled = None
+            for attempt in range(10):  # 10번 시도 (5초)
+                time.sleep(0.5)
+
+                filled = self._get_order_details(order_uuid)
 
                 if filled:
-                    avg_price = float(filled['price'])
-                    filled_qty = float(filled['executed_volume'])
+                    break
 
-                    # 상태 저장
-                    position_data = {
-                        'entry_price': avg_price,
-                        'quantity': filled_qty,
-                        'investment': investment,
-                        'entry_time': datetime.now().isoformat(),
-                        'order_id': order['uuid']
-                    }
+                # 디버그: 중간 상태 로그
+                if attempt == 2 or attempt == 5:
+                    info(f"  체결 대기 중... ({attempt * 0.5:.1f}초)")
 
-                    state_manager.update_position('spot', coin, position_data)
+            # 🔥 체결 확인
+            if filled:
+                avg_price = float(filled['price'])
+                filled_qty = float(filled['executed_volume'])
 
-                    # 로그
-                    trade_log('BUY', coin, avg_price, filled_qty, '시장가 매수')
+                info(f"✅ 체결 완료!")
+                info(f"  체결가: {avg_price:,.0f}원")
+                info(f"  체결 수량: {filled_qty:.8f}")
+                info(f"  실제 투자: {avg_price * filled_qty:,.0f}원")
 
-                    return {
-                        'success': True,
-                        'order_id': order['uuid'],
-                        'price': avg_price,
-                        'quantity': filled_qty,
-                        'investment': investment
-                    }
+                # 상태 저장
+                position_data = {
+                    'entry_price': avg_price,
+                    'quantity': filled_qty,
+                    'investment': investment,
+                    'entry_time': datetime.now().isoformat(),
+                    'order_id': order_uuid,
+                    'reason': reason
+                }
 
-            error("❌ 주문 실패")
-            return {'success': False, 'reason': 'Order failed'}
+                state_manager.update_position('spot', coin, position_data)
+
+                # 로그
+                trade_log('BUY', coin, avg_price, filled_qty, reason)
+
+                info("=" * 60)
+
+                return {
+                    'success': True,
+                    'order_id': order_uuid,
+                    'price': avg_price,
+                    'quantity': filled_qty,
+                    'investment': investment
+                }
+            else:
+                # 🔥 체결 안 됐지만 주문은 성공
+                warning("⚠️ 주문은 접수되었으나 체결 확인 실패")
+                warning(f"   주문 ID: {order_uuid}")
+                warning("   나중에 수동으로 확인 필요!")
+
+                # 일단 성공으로 처리 (실제 주문은 됨)
+                return {
+                    'success': True,
+                    'order_id': order_uuid,
+                    'price': current_price,  # 예상가
+                    'quantity': quantity,    # 예상 수량
+                    'investment': investment,
+                    'pending': True  # 체결 확인 대기 중
+                }
 
         except Exception as e:
             error(f"❌ 매수 오류: {e}")
+            import traceback
+            error(traceback.format_exc())
             return {'success': False, 'reason': str(e)}
 
     def sell(self, coin, reason='익절/손절'):
         """
-        매도 실행
+        매도 실행 (🔥 buy와 동일하게 수정)
 
         Args:
             coin: "KRW-BTC"
@@ -236,59 +296,105 @@ class SpotTrader:
             info(f"  수량: {quantity:.8f}")
             info(f"  진입가: {entry_price:,.0f}원")
             info(f"  현재가: {current_price:,.0f}원")
+            info(f"  사유: {reason}")
 
-            # 매도 주문
+            # 🔥 매도 주문
             order = self.upbit.sell_market_order(coin, quantity)
 
-            if order:
-                # 주문 완료 대기
-                time.sleep(1)
+            # 🔥 주문 응답 체크
+            if order is None:
+                error("❌ 매도 주문 실패 (order=None)")
+                return {'success': False, 'reason': 'Order response is None'}
 
-                # 체결 확인
-                filled = self._get_order_details(order['uuid'])
+            if 'error' in order:
+                error(f"❌ 매도 주문 실패: {order['error'].get('message', 'Unknown')}")
+                return {'success': False, 'reason': order['error'].get('message')}
+
+            if 'uuid' not in order:
+                error(f"❌ 주문 응답에 uuid 없음: {order}")
+                return {'success': False, 'reason': 'No uuid'}
+
+            order_uuid = order['uuid']
+            info(f"✅ 매도 주문 접수!")
+            info(f"  주문 ID: {order_uuid}")
+
+            # 🔥 체결 대기
+            info("⏳ 체결 확인 중...")
+            filled = None
+            for attempt in range(10):
+                time.sleep(0.5)
+
+                filled = self._get_order_details(order_uuid)
 
                 if filled:
-                    avg_price = float(filled['price'])
-                    sell_amount = avg_price * quantity
+                    break
 
-                    # 수수료 계산
-                    received, fee = fee_calculator.calculate_spot_sell(sell_amount)
+            # 🔥 체결 확인
+            if filled:
+                avg_price = float(filled['price'])
+                sell_amount = avg_price * quantity
 
-                    # 손익 계산
-                    cost = entry_price * quantity
-                    pnl = received - cost
-                    return_percent = (pnl / cost) * 100
+                # 수수료 계산
+                received, fee = fee_calculator.calculate_spot_sell(sell_amount)
 
-                    is_win = pnl > 0
+                # 손익 계산
+                cost = entry_price * quantity
+                pnl = received - cost
+                return_percent = (pnl / cost) * 100
 
-                    info(f"  매도가: {avg_price:,.0f}원")
-                    info(f"  수수료: {fee:,.0f}원")
-                    info(f"  손익: {pnl:+,.0f}원 ({return_percent:+.2f}%)")
+                is_win = pnl > 0
 
-                    # 거래 기록
-                    state_manager.record_trade('spot', pnl, is_win)
+                info(f"✅ 체결 완료!")
+                info(f"  체결가: {avg_price:,.0f}원")
+                info(f"  수수료: {fee:,.0f}원")
+                info(f"  수령액: {received:,.0f}원")
+                info(f"  {'💰 수익' if is_win else '📉 손실'}: {pnl:+,.0f}원 ({return_percent:+.2f}%)")
 
-                    # 포지션 제거
-                    state_manager.update_position('spot', coin, None)
+                # 거래 기록
+                state_manager.record_trade('spot', pnl, is_win)
 
-                    # 로그
-                    action = 'TAKE_PROFIT' if is_win else 'STOP_LOSS'
-                    trade_log(action, coin, avg_price, quantity, reason)
+                # 포지션 제거
+                state_manager.update_position('spot', coin, None)
 
-                    return {
-                        'success': True,
-                        'pnl': pnl,
-                        'return_percent': return_percent,
-                        'received': received,
-                        'fee': fee
-                    }
+                # 로그
+                action = 'TAKE_PROFIT' if is_win else 'STOP_LOSS'
+                trade_log(action, coin, avg_price, quantity, reason)
 
-            error("❌ 매도 실패")
-            return {'success': False}
+                info("=" * 60)
+
+                return {
+                    'success': True,
+                    'pnl': pnl,
+                    'return_percent': return_percent,
+                    'received': received,
+                    'fee': fee
+                }
+            else:
+                warning("⚠️ 매도 주문은 접수되었으나 체결 확인 실패")
+                warning(f"   주문 ID: {order_uuid}")
+
+                # 일단 성공으로 처리
+                return {
+                    'success': True,
+                    'order_id': order_uuid,
+                    'pending': True
+                }
 
         except Exception as e:
             error(f"❌ 매도 오류: {e}")
+            import traceback
+            error(traceback.format_exc())
             return {'success': False, 'reason': str(e)}
+
+    def sell_all(self, coin, reason='전량 매도'):
+        """
+        전량 매도 (별칭)
+
+        Args:
+            coin: "KRW-BTC"
+            reason: 매도 사유
+        """
+        return self.sell(coin, reason)
 
     def check_exit_condition(self, coin):
         """
@@ -343,12 +449,30 @@ class SpotTrader:
 
     @with_retry
     def _get_order_details(self, order_id):
-        """주문 상세 조회"""
+        """
+        주문 상세 조회 (🔥 개선!)
+
+        Args:
+            order_id: 주문 UUID
+
+        Returns:
+            dict or None: 체결된 주문 정보
+        """
         try:
             order = self.upbit.get_order(order_id)
 
-            if order and order['state'] == 'done':
+            if not order:
+                return None
+
+            # 🔥 'done' 상태만 체결 완료로 인정
+            if order.get('state') == 'done':
                 return order
+
+            # 디버그: 중간 상태 로그
+            current_state = order.get('state', 'unknown')
+            if current_state != 'done':
+                # 상태 변화 추적 (선택사항)
+                pass
 
             return None
 
