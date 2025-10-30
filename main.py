@@ -38,8 +38,12 @@ except ImportError:
 from traders.spot_trader import spot_trader
 from traders.futures_trader import futures_trader
 
-# Strategy Registry
-from strategies import strategy_registry, futures_strategy_registry
+# 🔥 Strategy Registry + get_strategy
+from strategies import (
+    strategy_registry,
+    futures_strategy_registry,
+    get_strategy  # 🔥 추가!
+)
 
 # 뉴스 수집기
 try:
@@ -140,18 +144,23 @@ class CoinMoneyBot:
         # 5. 주기 설정 (초 단위)
         # ============================================================
 
-        self.spot_check_interval = SPOT_CHECK_INTERVAL  # 워커 체크 주기 (보통 30초)
-        self.portfolio_interval = 1800  # 포트폴리오 재분석 (30분)
+        # CHECK_INTERVALS에서 가져오기
+        try:
+            self.spot_check_interval = CHECK_INTERVALS.get('spot', 30)
+        except:
+            self.spot_check_interval = 30  # 기본값 30초
+
+        self.portfolio_interval = 1800      # 포트폴리오 재분석 (30분)
         self.market_sentiment_interval = 300  # 시장 감정 업데이트 (5분)
 
         # ============================================================
         # 6. 통계 & 추적
         # ============================================================
 
-        self.spot_loop_counts = {}  # 코인별 분석 횟수
-        self.futures_loop_counts = {}  # 선물 분석 횟수
-        self.last_news_check = None  # 마지막 뉴스 체크 시간
-        self.last_portfolio_update = None  # 마지막 포트폴리오 업데이트
+        self.spot_loop_counts = {}          # 코인별 분석 횟수
+        self.futures_loop_counts = {}       # 선물 분석 횟수
+        self.last_news_check = None         # 마지막 뉴스 체크 시간
+        self.last_portfolio_update = None   # 마지막 포트폴리오 업데이트
 
         # ============================================================
         # 완료
@@ -229,7 +238,7 @@ class CoinMoneyBot:
                 # 5. 완료
                 info(f"\n✅ 포트폴리오 업데이트 완료")
                 info(f"   활성 워커: {len(budget_only)}개")
-                info(f"   다음 분석: {self.portfolio_interval / 60:.0f}분 후")
+                info(f"   다음 분석: {self.portfolio_interval // 60}분 후")
                 info("=" * 60 + "\n")
 
                 # 6. 대기 (30분)
@@ -352,7 +361,7 @@ class CoinMoneyBot:
 
                 info("="*60)
 
-                await asyncio.sleep(300)
+                await asyncio.sleep(self.market_sentiment_interval)
 
             except asyncio.CancelledError:
                 info("🛑 시장 감정 워커 종료")
@@ -459,7 +468,7 @@ class CoinMoneyBot:
 
     async def execute_spot_strategies(self, coin, analysis_result, budget):
         """
-        현물 전략 실행 (Registry 패턴 + 예산 관리)
+        현물 전략 실행 (🔥 완전 수정!)
 
         Args:
             coin: 거래 코인
@@ -472,6 +481,7 @@ class CoinMoneyBot:
         spot_strategies = analysis_result['strategies'].get('spot', [])
 
         if not spot_strategies:
+            # 전략 없으면 포지션 청산
             state = state_manager.state['spot']
             if state['in_position']:
                 info(f"📤 [{coin}] 모든 전략 비활성 → 포지션 청산")
@@ -482,42 +492,49 @@ class CoinMoneyBot:
                 )
             return
 
-        # Registry 패턴으로 전략 실행
+        # 🔥 전략 실행 (execute() 메서드 사용)
         for strategy_name in spot_strategies:
-            strategy_module = strategy_registry.get(strategy_name)
+            try:
+                # 전략 가져오기
+                strategy = get_strategy(strategy_name)
 
-            if strategy_module:
-                try:
-                    action = await asyncio.to_thread(
-                        strategy_module.run,
+                if not strategy:
+                    warning(f"⚠️ 알 수 없는 전략: {strategy_name}")
+                    continue
+
+                # execute() 메서드 호출
+                result = await asyncio.to_thread(strategy.execute, coin)
+
+                if not result:
+                    continue
+
+                action = result.get('action')
+
+                # 매수
+                if action == 'BUY':
+                    trade_amount = budget * 0.3  # 예산의 30%
+
+                    info(f"💰 [{coin}] {strategy_name} 매수 신호 (예산: {budget:,}원)")
+                    await asyncio.to_thread(
+                        spot_trader.buy,
                         coin,
-                        analysis_result['analysis']
+                        trade_amount,
+                        reason=f"{strategy_name} 매수"
                     )
 
-                    if action == 'BUY':
-                        # 💰 배분된 예산 사용
-                        trade_amount = budget * 0.3  # 예산의 30%씩 매수
+                # 매도
+                elif action == 'SELL':
+                    info(f"📤 [{coin}] {strategy_name} 매도 신호")
+                    await asyncio.to_thread(
+                        spot_trader.sell_all,
+                        coin,
+                        reason=f"{strategy_name} 매도"
+                    )
 
-                        info(f"💰 [{coin}] {strategy_name} 매수 신호 (예산: {budget:,}원)")
-                        await asyncio.to_thread(
-                            spot_trader.buy,
-                            coin,
-                            trade_amount,
-                            reason=f"{strategy_name} 매수"
-                        )
-
-                    elif action == 'SELL':
-                        info(f"📤 [{coin}] {strategy_name} 매도 신호")
-                        await asyncio.to_thread(
-                            spot_trader.sell_all,
-                            coin,
-                            reason=f"{strategy_name} 매도"
-                        )
-
-                except Exception as e:
-                    error(f"❌ [{coin}] {strategy_name} 실행 오류: {e}")
-            else:
-                warning(f"⚠️ 알 수 없는 전략: {strategy_name}")
+            except Exception as e:
+                error(f"❌ [{coin}] {strategy_name} 실행 오류: {e}")
+                import traceback
+                error(traceback.format_exc())
 
     async def spot_worker(self, coin, budget=None):
         """
@@ -525,7 +542,7 @@ class CoinMoneyBot:
 
         Args:
             coin: 거래 코인
-            budget: 배분된 예산 (None이면 포트폴리오 매니저에서 조회)
+            budget: 배분된 예산
         """
         loop_count = 0
 
@@ -538,7 +555,7 @@ class CoinMoneyBot:
 
                 # 예산 조회 (동적 업데이트)
                 if budget is None:
-                    budget = self.worker_manager.get_worker_budget(coin)
+                    budget = self.dynamic_workers.get_worker_budget(coin)
 
                 # 시장 감정 체크
                 if not self.market_sentiment['trading_allowed']:
@@ -553,7 +570,7 @@ class CoinMoneyBot:
                             reason=f"시장 {self.market_sentiment['status']}"
                         )
 
-                    await asyncio.sleep(CHECK_INTERVALS['main_loop'])
+                    await asyncio.sleep(self.spot_check_interval)
                     continue
 
                 info(f"\n{'='*60}")
@@ -565,7 +582,7 @@ class CoinMoneyBot:
                 # 시장 데이터
                 market_data = await self.get_market_data(coin)
                 if not market_data:
-                    await asyncio.sleep(CHECK_INTERVALS['main_loop'])
+                    await asyncio.sleep(self.spot_check_interval)
                     continue
 
                 info(f"💰 현재가: {market_data['price']:,.0f}원")
@@ -595,7 +612,7 @@ class CoinMoneyBot:
 
                 if not analysis_result:
                     warning("⚠️ 분석 실패")
-                    await asyncio.sleep(CHECK_INTERVALS['main_loop'])
+                    await asyncio.sleep(self.spot_check_interval)
                     continue
 
                 # 전략 실행 (예산 전달)
@@ -604,7 +621,7 @@ class CoinMoneyBot:
 
                 info(f"{'='*60}\n")
 
-                await asyncio.sleep(CHECK_INTERVALS['main_loop'])
+                await asyncio.sleep(self.spot_check_interval)
 
             except asyncio.CancelledError:
                 info(f"🛑 [{coin}] 워커 종료")
@@ -612,6 +629,8 @@ class CoinMoneyBot:
 
             except Exception as e:
                 error(f"⚠️ [{coin}] 워커 오류: {e}")
+                import traceback
+                error(traceback.format_exc())
                 await asyncio.sleep(10)
 
     # ========================================
@@ -712,10 +731,10 @@ class CoinMoneyBot:
         info(f"🌍 시장 상태: {emoji} {self.market_sentiment['status']}")
 
         # 포트폴리오
-        active_coins = self.worker_manager.get_active_coins()
+        active_coins = list(self.dynamic_workers.active_workers.keys())
         info(f"💼 활성 코인: {len(active_coins)}개")
         for coin in active_coins:
-            budget = self.worker_manager.get_worker_budget(coin)
+            budget = self.dynamic_workers.active_workers[coin].get('budget', 0)
             count = self.spot_loop_counts.get(coin, 0)
             info(f"   🟢 {coin}: {budget:,}원 (루프: {count}회)")
 
@@ -733,9 +752,9 @@ class CoinMoneyBot:
         """메인 실행 (비동기)"""
         info("=" * 60)
         info("🎯 자동매매 시작! (동적 포트폴리오)")
-        info(f"📊 현물 체크 주기: {CHECK_INTERVALS['main_loop']}초")
-        info(f"💼 포트폴리오 체크 주기: 1800초 (30분)")
-        info(f"🌍 시장 감정 체크 주기: 300초 (5분)")
+        info(f"📊 현물 체크 주기: {self.spot_check_interval}초")
+        info(f"💼 포트폴리오 체크 주기: {self.portfolio_interval}초 ({self.portfolio_interval // 60}분)")
+        info(f"🌍 시장 감정 체크 주기: {self.market_sentiment_interval}초 ({self.market_sentiment_interval // 60}분)")
         info("=" * 60)
 
         tasks = []
