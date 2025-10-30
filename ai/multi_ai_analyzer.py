@@ -177,12 +177,13 @@ class MultiAIAnalyzer:
         return final_decision
 
     # 🔥 동기 호출 별칭 (컨트롤러 호환성)
-    def analyze_sync(self, coin, df, news_list=None):
+    def analyze_sync(self, coin=None, ticker=None, df=None, news_list=None):
         """
         동기 분석 (컨트롤러 호환)
 
         Args:
-            coin: 코인 티커 (예: "KRW-BTC")
+            coin: 코인 티커 (예: "KRW-BTC") - 호환성
+            ticker: 코인 티커 (예: "KRW-BTC") - 호환성
             df: OHLCV DataFrame
             news_list: 뉴스 리스트 (선택)
 
@@ -190,6 +191,13 @@ class MultiAIAnalyzer:
             dict: 분석 결과
         """
         try:
+            # 🔥 coin과 ticker 둘 다 받기 (호환성)
+            symbol = coin or ticker
+
+            if not symbol:
+                error("❌ coin 또는 ticker 파라미터 필요")
+                return None
+
             # DataFrame에서 시장 데이터 추출
             if df is None or len(df) == 0:
                 warning("⚠️ DataFrame 없음")
@@ -215,7 +223,7 @@ class MultiAIAnalyzer:
 
             # 시장 데이터 구성
             market_data = {
-                'coin': coin.replace('KRW-', ''),
+                'coin': symbol.replace('KRW-', ''),
                 'price': current_price,
                 'price_change_24h': price_change_24h,
                 'volume_change': volume_change,
