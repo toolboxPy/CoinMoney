@@ -6,6 +6,7 @@ CoinMoney 자동매매 봇 (v3.3 - 동적 포트폴리오)
 2. 🔥 거래량 기반 코인 발굴
 3. ⚙️ 워커 동적 생성/제거
 4. 💰 개별 워커별 독립 예산
+5. 💼 실시간 포트폴리오 표시 (추가!)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 import pyupbit
@@ -133,7 +134,7 @@ class CoinMoneyBot:
 
         # 🔥 포트폴리오 매니저 (동적 예산 - upbit_instance 전달)
         self.portfolio_manager = PortfolioManager(
-            upbit_instance=self.upbit,  # ✅ 인스턴스 전달!
+            upbit_instance=self.upbit,
             max_coins=5,
             min_score=20.0
         )
@@ -163,31 +164,34 @@ class CoinMoneyBot:
         try:
             self.spot_check_interval = CHECK_INTERVALS.get('spot', 30)
         except:
-            self.spot_check_interval = 30  # 기본값 30초
+            self.spot_check_interval = 30
 
-        self.portfolio_interval = 1800      # 포트폴리오 재분석 (30분)
-        self.market_sentiment_interval = 300  # 시장 감정 업데이트 (5분)
+        self.portfolio_interval = 1800
+        self.market_sentiment_interval = 300
 
         # ============================================================
         # 6. 통계 & 추적
         # ============================================================
 
-        self.spot_loop_counts = {}          # 코인별 분석 횟수
-        self.futures_loop_counts = {}       # 선물 분석 횟수
-        self.last_news_check = None         # 마지막 뉴스 체크 시간
-        self.last_portfolio_update = None   # 마지막 포트폴리오 업데이트
+        self.spot_loop_counts = {}
+        self.futures_loop_counts = {}
+        self.last_news_check = None
+        self.last_portfolio_update = None
 
         # ============================================================
-        # 완료
+        # 완료 + 🔥 초기 포트폴리오 표시
         # ============================================================
 
         info("=" * 60)
         info("✅ CoinMoney Bot 초기화 완료!")
-        info(f"   💰 초기 KRW 잔고: {self.initial_krw_balance:,.0f}원")  # 🔥 수정!
+        info(f"   💰 초기 KRW 잔고: {self.initial_krw_balance:,.0f}원")
         info(f"   ⏰ 포트폴리오 주기: {self.portfolio_interval // 60}분")
         info(f"   📊 워커 체크 주기: {self.spot_check_interval}초")
         info(f"   🌍 시장 감정 주기: {self.market_sentiment_interval // 60}분")
         info("=" * 60)
+
+        # 🔥 초기 포트폴리오 표시
+        spot_trader.print_portfolio()
 
     def check_connection(self):
         """연결 확인"""
@@ -254,6 +258,10 @@ class CoinMoneyBot:
                 info(f"\n✅ 포트폴리오 업데이트 완료")
                 info(f"   활성 워커: {len(budget_only)}개")
                 info(f"   다음 분석: {self.portfolio_interval // 60}분 후")
+
+                # 🔥 포트폴리오 표시
+                spot_trader.print_portfolio_simple()
+
                 info("=" * 60 + "\n")
 
                 # 6. 대기 (30분)
@@ -268,7 +276,6 @@ class CoinMoneyBot:
                 import traceback
                 error(traceback.format_exc())
 
-                # 5분 후 재시도
                 await asyncio.sleep(300)
 
     # ========================================
@@ -505,6 +512,9 @@ class CoinMoneyBot:
                     coin,
                     reason="전략 비활성화"
                 )
+
+                # 🔥 매도 후 포트폴리오
+                spot_trader.print_portfolio_simple()
             return
 
         # 전략 실행
@@ -530,21 +540,29 @@ class CoinMoneyBot:
                     trade_amount = budget * 0.3  # 예산의 30%
 
                     info(f"💰 [{coin}] {strategy_name} 매수 신호 (예산: {budget:,}원)")
-                    await asyncio.to_thread(
+                    buy_result = await asyncio.to_thread(
                         spot_trader.buy,
                         coin,
                         trade_amount,
                         reason=f"{strategy_name} 매수"
                     )
 
+                    # 🔥 매수 후 포트폴리오
+                    if buy_result.get('success'):
+                        spot_trader.print_portfolio_simple()
+
                 # 매도
                 elif action == 'SELL':
                     info(f"📤 [{coin}] {strategy_name} 매도 신호")
-                    await asyncio.to_thread(
+                    sell_result = await asyncio.to_thread(
                         spot_trader.sell_all,
                         coin,
                         reason=f"{strategy_name} 매도"
                     )
+
+                    # 🔥 매도 후 포트폴리오
+                    if sell_result.get('success'):
+                        spot_trader.print_portfolio_simple()
 
             except Exception as e:
                 error(f"❌ [{coin}] {strategy_name} 실행 오류: {e}")
@@ -584,6 +602,9 @@ class CoinMoneyBot:
                             coin,
                             reason=f"시장 {self.market_sentiment['status']}"
                         )
+
+                        # 🔥 긴급 청산 후 포트폴리오
+                        spot_trader.print_portfolio_simple()
 
                     await asyncio.sleep(self.spot_check_interval)
                     continue
@@ -695,7 +716,7 @@ class CoinMoneyBot:
 
         info(f"🔵 [{symbol}] 선물 워커 시작")
 
-        # TODO: 선물 로직 (기존 코드 유지)
+        # TODO: 선물 로직
         while True:
             await asyncio.sleep(CHECK_INTERVALS.get('futures', 300))
 
@@ -757,6 +778,10 @@ class CoinMoneyBot:
         risk_stats = global_risk.get_statistics()
         info(f"⚠️ 일일 손익: {risk_stats.get('daily_pnl', 0):+,.0f}원")
 
+        # 🔥 포트폴리오 요약
+        info("")
+        spot_trader.print_portfolio_simple()
+
         info("=" * 60 + "\n")
 
     # ========================================
@@ -810,6 +835,11 @@ class CoinMoneyBot:
             warning("⚠️ 상태 저장 실패")
 
         self._print_statistics()
+
+        # 🔥 최종 포트폴리오
+        info("\n📊 최종 포트폴리오:")
+        spot_trader.print_portfolio()
+
         info("👋 안녕히 가세요!")
 
 

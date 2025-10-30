@@ -1,12 +1,12 @@
 """
 현물 트레이더 (업비트)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-[v1.2 - API 정확 활용 + 최소 금액 자동 조정]
-- trades 배열 파싱으로 정확한 체결가 계산
-- 주문 가능 정보 API 추가
-- 가중 평균 체결가 계산
-- 수수료 정확히 반영
-- 🔥 최소 주문 금액 미달 시 5,100원(+2%)으로 자동 조정
+[v1.3 - 체결 감지 완벽 개선]
+- trades 배열로 체결 여부 정확히 판단
+- state='wait'여도 trades 있으면 체결 인정
+- 부분 체결 처리 추가
+- 취소된 주문도 체결된 부분 처리
+- 대기 시간 10초로 연장
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 import sys
@@ -185,7 +185,7 @@ class SpotTrader:
 
     def buy(self, coin, investment=None, reason="매수"):
         """
-        매수 실행 (정확한 체결가 계산 + 최소 금액 자동 조정)
+        매수 실행 (체결 감지 완벽)
 
         Args:
             coin: "KRW-BTC"
@@ -290,10 +290,10 @@ class SpotTrader:
             info(f"  주문 ID: {order_uuid}")
             info(f"  주문 상태: {order.get('state', 'N/A')}")
 
-            # 🔥 체결 대기 (최대 5초, 0.5초 간격)
+            # 🔥 체결 대기 (최대 10초, 0.5초 간격)
             info("⏳ 체결 확인 중...")
             filled = None
-            for attempt in range(10):  # 10번 시도 (5초)
+            for attempt in range(20):  # 🔥 20번 시도 (10초)
                 time.sleep(0.5)
 
                 filled = self._get_order_details(order_uuid)
@@ -302,7 +302,7 @@ class SpotTrader:
                     break
 
                 # 디버그: 중간 상태 로그
-                if attempt == 2 or attempt == 5:
+                if attempt % 5 == 2:
                     info(f"  체결 대기 중... ({attempt * 0.5:.1f}초)")
 
             # 🔥 체결 확인
@@ -313,8 +313,17 @@ class SpotTrader:
                 actual_investment = filled['total_funds']
                 paid_fee = filled['paid_fee']
 
+                # 부분 체결 여부
+                is_partial = filled.get('is_partial', False)
+                is_cancelled = filled.get('is_cancelled', False)
+
                 # 🔥 개선된 로그!
                 info(f"✅ 체결 완료!")
+                if is_partial:
+                    warning(f"⚠️ 부분 체결됨 (남은 수량: {filled.get('remaining_volume', 0):.8f})")
+                if is_cancelled:
+                    warning(f"⚠️ 주문이 취소되었으나 일부 체결됨")
+
                 info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                 info(f"📋 예상:")
                 info(f"  예상가: {current_price:,.0f}원")
@@ -362,7 +371,8 @@ class SpotTrader:
                     'paid_fee': paid_fee,
                     'entry_time': datetime.now().isoformat(),
                     'order_id': order_uuid,
-                    'reason': reason
+                    'reason': reason,
+                    'is_partial': is_partial
                 }
 
                 state_manager.update_position('spot', coin, position_data)
@@ -378,22 +388,19 @@ class SpotTrader:
                     'price': avg_price,
                     'quantity': filled_qty,
                     'investment': actual_investment,
-                    'fee': paid_fee
+                    'fee': paid_fee,
+                    'is_partial': is_partial
                 }
             else:
-                # 🔥 체결 안 됐지만 주문은 성공
-                warning("⚠️ 주문은 접수되었으나 체결 확인 실패")
-                warning(f"   주문 ID: {order_uuid}")
-                warning("   나중에 수동으로 확인 필요!")
+                # 🔥 10초 동안 체결 안 됨
+                error("❌ 체결 확인 실패 (10초 타임아웃)")
+                error(f"   주문 ID: {order_uuid}")
+                error("   수동 확인 필요!")
 
-                # 일단 성공으로 처리 (실제 주문은 됨)
                 return {
-                    'success': True,
-                    'order_id': order_uuid,
-                    'price': current_price,  # 예상가
-                    'quantity': expected_quantity,    # 예상 수량
-                    'investment': investment,
-                    'pending': True  # 체결 확인 대기 중
+                    'success': False,
+                    'reason': 'Execution timeout',
+                    'order_id': order_uuid
                 }
 
         except Exception as e:
@@ -404,7 +411,7 @@ class SpotTrader:
 
     def sell(self, coin, reason='익절/손절'):
         """
-        매도 실행 (정확한 체결가 계산)
+        매도 실행 (체결 감지 완벽)
 
         Args:
             coin: "KRW-BTC"
@@ -465,16 +472,19 @@ class SpotTrader:
             info(f"✅ 매도 주문 접수!")
             info(f"  주문 ID: {order_uuid}")
 
-            # 🔥 체결 대기
+            # 🔥 체결 대기 (최대 10초)
             info("⏳ 체결 확인 중...")
             filled = None
-            for attempt in range(10):
+            for attempt in range(20):  # 🔥 20번 시도 (10초)
                 time.sleep(0.5)
 
                 filled = self._get_order_details(order_uuid)
 
                 if filled:
                     break
+
+                if attempt % 5 == 2:
+                    info(f"  체결 대기 중... ({attempt * 0.5:.1f}초)")
 
             # 🔥 체결 확인
             if filled:
@@ -483,6 +493,10 @@ class SpotTrader:
                 sell_amount = filled['total_funds']
                 paid_fee = filled['paid_fee']
                 received = sell_amount - paid_fee
+
+                # 부분 체결 여부
+                is_partial = filled.get('is_partial', False)
+                is_cancelled = filled.get('is_cancelled', False)
 
                 # 손익 계산
                 total_cost = entry_investment + entry_fee  # 매수금 + 매수수수료
@@ -493,6 +507,11 @@ class SpotTrader:
 
                 # 🔥 개선된 로그!
                 info(f"✅ 체결 완료!")
+                if is_partial:
+                    warning(f"⚠️ 부분 체결됨 (남은 수량: {filled.get('remaining_volume', 0):.8f})")
+                if is_cancelled:
+                    warning(f"⚠️ 주문이 취소되었으나 일부 체결됨")
+
                 info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                 info(f"📋 매도 내역:")
                 info(f"  진입가: {entry_price:,.2f}원")
@@ -541,17 +560,17 @@ class SpotTrader:
                     'pnl': pnl,
                     'return_percent': return_percent,
                     'received': received,
-                    'fee': paid_fee
+                    'fee': paid_fee,
+                    'is_partial': is_partial
                 }
             else:
-                warning("⚠️ 매도 주문은 접수되었으나 체결 확인 실패")
-                warning(f"   주문 ID: {order_uuid}")
+                error("❌ 매도 체결 확인 실패 (10초 타임아웃)")
+                error(f"   주문 ID: {order_uuid}")
 
-                # 일단 성공으로 처리
                 return {
-                    'success': True,
-                    'order_id': order_uuid,
-                    'pending': True
+                    'success': False,
+                    'reason': 'Execution timeout',
+                    'order_id': order_uuid
                 }
 
         except Exception as e:
@@ -624,7 +643,7 @@ class SpotTrader:
     @with_retry
     def _get_order_details(self, order_id):
         """
-        주문 상세 조회 (🔥 trades 배열 파싱!)
+        주문 상세 조회 (🔥 체결 여부 정확 판단!)
 
         Args:
             order_id: 주문 UUID
@@ -636,7 +655,9 @@ class SpotTrader:
                 'executed_volume': float,
                 'total_funds': float,
                 'paid_fee': float,
-                'trades': [...]
+                'trades': [...],
+                'is_partial': bool,
+                'is_cancelled': bool
             }
         """
         try:
@@ -645,18 +666,30 @@ class SpotTrader:
             if not order:
                 return None
 
-            # 🔥 'done' 상태만 체결 완료로 인정
-            if order.get('state') != 'done':
-                return None
+            state = order.get('state')
 
-            # 🔥 trades 배열 파싱!
+            # 🔥 취소된 주문 체크
+            if state == 'cancel':
+                # 취소되었어도 일부 체결되었을 수 있음
+                trades = order.get('trades', [])
+                executed_volume = float(order.get('executed_volume', 0))
+
+                if not trades or len(trades) == 0:
+                    # 완전 취소 (체결 없음)
+                    return None
+
+                # 부분 체결 후 취소 → 계속 진행
+
+            # 🔥 trades 배열 체크 (핵심!)
             trades = order.get('trades', [])
 
+            # trades가 없으면 아직 체결 안 됨
             if not trades or len(trades) == 0:
-                # trades가 없으면 체결 안 됨
                 return None
 
-            # 🔥 가중 평균 체결가 계산!
+            # 🔥 trades가 있으면 체결된 것! (state 무관)
+
+            # 가중 평균 체결가 계산
             total_volume = 0.0
             total_funds = 0.0
 
@@ -673,15 +706,25 @@ class SpotTrader:
             # 수수료
             paid_fee = float(order.get('paid_fee', 0))
 
-            return {
-                'state': order.get('state'),
+            # 🔥 부분 체결 여부
+            remaining_volume = float(order.get('remaining_volume', 0))
+            is_partial = (remaining_volume > 0)
+            is_cancelled = (state == 'cancel')
+
+            result = {
+                'state': state,
                 'avg_price': avg_price,
                 'executed_volume': total_volume,
                 'total_funds': total_funds,
                 'paid_fee': paid_fee,
                 'trades': trades,
+                'is_partial': is_partial,
+                'is_cancelled': is_cancelled,
+                'remaining_volume': remaining_volume,
                 'raw': order  # 원본 데이터 보관
             }
+
+            return result
 
         except Exception as e:
             warning(f"⚠️ 주문 조회 실패: {e}")
@@ -699,13 +742,145 @@ class SpotTrader:
             error(f"❌ 잔고 조회 오류: {e}")
             return []
 
+    def get_portfolio_summary(self):
+        """
+        포트폴리오 요약 (잔액 + 보유 자산)
+
+        Returns:
+            dict: {
+                'krw_balance': float,
+                'positions': [...],
+                'total_value': float,
+                'total_pnl': float,
+                'total_pnl_percent': float
+            }
+        """
+        if not self.connected:
+            return None
+
+        try:
+            # KRW 잔고
+            krw_balance = self.get_balance("KRW")
+
+            # 보유 포지션
+            positions = state_manager.get_all_positions('spot')
+
+            position_list = []
+            total_investment = 0.0
+            total_value = 0.0
+
+            if positions:
+                for coin, pos in positions.items():
+                    # 현재가
+                    current_price = self.get_current_price(coin)
+
+                    # 평가액
+                    entry_price = pos['entry_price']
+                    quantity = pos['quantity']
+                    investment = pos.get('investment', entry_price * quantity)
+                    current_value = current_price * quantity
+
+                    # 손익
+                    pnl = current_value - investment
+                    pnl_percent = (pnl / investment) * 100 if investment > 0 else 0
+
+                    position_list.append({
+                        'coin': coin,
+                        'quantity': quantity,
+                        'entry_price': entry_price,
+                        'current_price': current_price,
+                        'investment': investment,
+                        'current_value': current_value,
+                        'pnl': pnl,
+                        'pnl_percent': pnl_percent,
+                        'entry_time': pos.get('entry_time', ''),
+                        'reason': pos.get('reason', '')
+                    })
+
+                    total_investment += investment
+                    total_value += current_value
+
+            # 총 자산
+            total_assets = krw_balance + total_value
+
+            # 총 손익
+            total_pnl = total_value - total_investment
+            total_pnl_percent = (total_pnl / total_investment) * 100 if total_investment > 0 else 0
+
+            return {
+                'krw_balance': krw_balance,
+                'positions': position_list,
+                'total_investment': total_investment,
+                'total_value': total_value,
+                'total_assets': total_assets,
+                'total_pnl': total_pnl,
+                'total_pnl_percent': total_pnl_percent
+            }
+
+        except Exception as e:
+            error(f"❌ 포트폴리오 조회 오류: {e}")
+            return None
+
+    def print_portfolio(self):
+        """포트폴리오 요약 출력 (보기 좋게)"""
+        summary = self.get_portfolio_summary()
+
+        if not summary:
+            error("❌ 포트폴리오 조회 실패")
+            return
+
+        info("\n" + "=" * 60)
+        info("💼 포트폴리오 요약")
+        info("=" * 60)
+
+        # KRW 잔고
+        info(f"💰 KRW 잔고: {summary['krw_balance']:,.0f}원")
+
+        # 보유 포지션
+        if summary['positions']:
+            info(f"\n📊 보유 포지션 ({len(summary['positions'])}개):")
+            info("-" * 60)
+
+            for pos in summary['positions']:
+                coin_name = pos['coin'].replace('KRW-', '')
+
+                # 손익 색상
+                pnl_emoji = "📈" if pos['pnl'] >= 0 else "📉"
+                pnl_sign = "+" if pos['pnl'] >= 0 else ""
+
+                info(f"{pnl_emoji} {coin_name}")
+                info(f"   수량: {pos['quantity']:.8f}개")
+                info(f"   평단: {pos['entry_price']:,.2f}원 → 현재: {pos['current_price']:,.2f}원")
+                info(f"   투자: {pos['investment']:,.0f}원 → 평가: {pos['current_value']:,.0f}원")
+                info(f"   손익: {pnl_sign}{pos['pnl']:,.0f}원 ({pnl_sign}{pos['pnl_percent']:.2f}%)")
+
+                if pos.get('reason'):
+                    info(f"   사유: {pos['reason']}")
+
+                info("")
+        else:
+            info("\n📦 보유 포지션: 없음")
+
+        # 요약
+        info("-" * 60)
+        info(f"💼 총 투자금: {summary['total_investment']:,.0f}원")
+        info(f"💎 포지션 평가액: {summary['total_value']:,.0f}원")
+
+        total_pnl_emoji = "📈" if summary['total_pnl'] >= 0 else "📉"
+        total_pnl_sign = "+" if summary['total_pnl'] >= 0 else ""
+        info(
+            f"{total_pnl_emoji} 총 손익: {total_pnl_sign}{summary['total_pnl']:,.0f}원 ({total_pnl_sign}{summary['total_pnl_percent']:.2f}%)")
+
+        info("")
+        info(f"🏦 총 자산: {summary['total_assets']:,.0f}원")
+        info("=" * 60 + "\n")
 
 # 전역 인스턴스
 spot_trader = SpotTrader()
 
 # 사용 예시
 if __name__ == "__main__":
-    print("🧪 Spot Trader v1.2 테스트\n")
+    print("🧪 Spot Trader v1.3 테스트 (체결 감지 완벽)\n")
 
     # 잔고 조회
     print("💰 잔고 조회:")
