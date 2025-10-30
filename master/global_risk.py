@@ -1,6 +1,15 @@
 """
 글로벌 리스크 관리자
 최후의 방어선 - 계좌 전체 보호
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[핵심 기능]
+1. 일일 손실 한도 체크
+2. 연속 손실 체크
+3. 계좌 낙폭 체크
+4. 포지션 수 한도 체크
+5. 일일 거래 횟수 체크
+6. 동적 잔고 기반 (실시간 KRW 잔고 사용)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 import sys
 import os
@@ -10,23 +19,80 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from datetime import datetime
-from config.master_config import GLOBAL_RISK, TOTAL_INVESTMENT
+from config.master_config import GLOBAL_RISK  # 🔥 TOTAL_INVESTMENT 제거!
 from utils.logger import info, warning, error, risk_alert
 from utils.state_manager import state_manager
 
 
 class GlobalRiskManager:
-    """글로벌 리스크 관리자"""
+    """글로벌 리스크 관리자 (동적 예산)"""
 
-    def __init__(self):
+    def __init__(self, upbit_instance=None):
+        """
+        초기화
+
+        Args:
+            upbit_instance: Upbit API 인스턴스 (실시간 잔고 조회용)
+        """
+        self.upbit = upbit_instance
         self.config = GLOBAL_RISK
         self.trading_enabled = True
         self.emergency_stop_reason = None
+
+        # 🔥 동적 잔고 관리
+        self.initial_balance = 0.0
+        self.current_balance = 0.0
+        self.peak_balance = 0.0
 
         info("🛡️ 글로벌 리스크 관리자 초기화")
         info(f"  일일 손실 한도: {self.config['daily_loss_limit'] * 100}%")
         info(f"  최대 연속 손실: {self.config['max_consecutive_losses']}회")
         info(f"  계좌 낙폭 한도: {self.config['account_drawdown_limit'] * 100}%")
+
+    def set_initial_balance(self, balance):
+        """
+        초기 잔고 설정 (봇 시작 시 호출)
+
+        Args:
+            balance: 초기 KRW 잔고
+        """
+        self.initial_balance = balance
+        self.current_balance = balance
+        self.peak_balance = balance
+        info(f"💰 초기 잔고 설정: {balance:,.0f}원")
+
+    def update_balance(self, new_balance):
+        """
+        현재 잔고 업데이트
+
+        Args:
+            new_balance: 현재 KRW 잔고
+        """
+        self.current_balance = new_balance
+
+        # 최고점 갱신
+        if new_balance > self.peak_balance:
+            self.peak_balance = new_balance
+
+    def get_current_balance(self):
+        """
+        실시간 KRW 잔고 조회
+
+        Returns:
+            float: 현재 KRW 잔고
+        """
+        if not self.upbit:
+            return self.current_balance
+
+        try:
+            krw_balance = self.upbit.get_balance("KRW")
+            if krw_balance is not None:
+                self.update_balance(krw_balance)
+                return krw_balance
+        except Exception as e:
+            warning(f"⚠️ 잔고 조회 오류: {e}")
+
+        return self.current_balance
 
     def check_risk_limits(self):
         """
@@ -43,6 +109,10 @@ class GlobalRiskManager:
         warnings_list = []
         emergency_stop = False
         stop_reason = None
+
+        # 🔥 실시간 잔고 갱신
+        if self.upbit:
+            self.get_current_balance()
 
         # 1. 일일 손실 한도 체크
         daily_loss = self._check_daily_loss()
@@ -100,9 +170,17 @@ class GlobalRiskManager:
         }
 
     def _check_daily_loss(self):
-        """일일 손실 체크"""
-        risk_stats = state_manager.get_risk_stats()
-        daily_loss_percent = abs(risk_stats['daily_loss_percent'])
+        """일일 손실 체크 (동적 잔고 기반)"""
+        # 🔥 실시간 계산
+        if self.initial_balance == 0:
+            return {
+                'percent': 0,
+                'exceeded': False,
+                'warning': False
+            }
+
+        daily_loss = (self.initial_balance - self.current_balance) / self.initial_balance
+        daily_loss_percent = abs(daily_loss)
 
         limit = self.config['daily_loss_limit']
         warning_threshold = limit * 0.7  # 70% 도달 시 경고
@@ -116,7 +194,7 @@ class GlobalRiskManager:
     def _check_consecutive_losses(self):
         """연속 손실 체크"""
         risk_stats = state_manager.get_risk_stats()
-        consecutive = risk_stats['consecutive_losses']
+        consecutive = risk_stats.get('consecutive_losses', 0)
 
         limit = self.config['max_consecutive_losses']
         warning_threshold = limit - 1
@@ -128,9 +206,17 @@ class GlobalRiskManager:
         }
 
     def _check_account_drawdown(self):
-        """계좌 낙폭 체크"""
-        risk_stats = state_manager.get_risk_stats()
-        max_drawdown = risk_stats['max_drawdown']
+        """계좌 낙폭 체크 (동적 잔고 기반)"""
+        # 🔥 실시간 계산
+        if self.peak_balance == 0:
+            return {
+                'percent': 0,
+                'exceeded': False,
+                'warning': False
+            }
+
+        drawdown = (self.peak_balance - self.current_balance) / self.peak_balance
+        max_drawdown = drawdown
 
         limit = self.config['account_drawdown_limit']
         warning_threshold = limit * 0.7
@@ -161,10 +247,10 @@ class GlobalRiskManager:
         daily_stats = state_manager.get_daily_stats()
 
         return {
-            'spot_count': daily_stats['spot_trades'],
-            'spot_exceeded': daily_stats['spot_trades'] >= self.config['max_trades_per_day']['spot'],
-            'futures_count': daily_stats['futures_trades'],
-            'futures_exceeded': daily_stats['futures_trades'] >= self.config['max_trades_per_day']['futures']
+            'spot_count': daily_stats.get('spot_trades', 0),
+            'spot_exceeded': daily_stats.get('spot_trades', 0) >= self.config['max_trades_per_day']['spot'],
+            'futures_count': daily_stats.get('futures_trades', 0),
+            'futures_exceeded': daily_stats.get('futures_trades', 0) >= self.config['max_trades_per_day']['futures']
         }
 
     def emergency_stop(self, reason):
@@ -185,6 +271,9 @@ class GlobalRiskManager:
         error("=" * 60)
         error(f"사유: {reason}")
         error(f"시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        error(f"초기 잔고: {self.initial_balance:,.0f}원")
+        error(f"현재 잔고: {self.current_balance:,.0f}원")
+        error(f"손실: {self.initial_balance - self.current_balance:,.0f}원")
         error("모든 거래가 중단되었습니다!")
         error("=" * 60 + "\n")
 
@@ -196,6 +285,11 @@ class GlobalRiskManager:
         info("\n🟢 거래 재개")
         self.trading_enabled = True
         self.emergency_stop_reason = None
+
+        # 🔥 잔고 초기화 (재개 시점을 새 시작점으로)
+        if self.upbit:
+            current = self.get_current_balance()
+            self.set_initial_balance(current)
 
     def can_open_position(self, exchange):
         """
@@ -243,7 +337,12 @@ class GlobalRiskManager:
             'consecutive_losses': self._check_consecutive_losses(),
             'drawdown': self._check_account_drawdown(),
             'positions': self._check_position_limits(),
-            'trades': self._check_trade_limits()
+            'trades': self._check_trade_limits(),
+            'balances': {
+                'initial': self.initial_balance,
+                'current': self.current_balance,
+                'peak': self.peak_balance
+            }
         }
 
     def get_statistics(self):
@@ -257,16 +356,21 @@ class GlobalRiskManager:
             'spot_positions': status['positions']['spot_count'],
             'futures_positions': status['positions']['futures_count'],
             'spot_trades': status['trades']['spot_count'],
-            'futures_trades': status['trades']['futures_count']
+            'futures_trades': status['trades']['futures_count'],
+            'current_balance': self.current_balance,
+            'initial_balance': self.initial_balance
         }
 
 
-# 전역 인스턴스
+# 🔥 전역 인스턴스 (upbit_instance는 main.py에서 설정)
 global_risk = GlobalRiskManager()
 
 # 사용 예시
 if __name__ == "__main__":
     print("🧪 Global Risk Manager 테스트\n")
+
+    # 🔥 테스트용 초기 잔고 설정
+    global_risk.set_initial_balance(1000000)  # 100만원
 
     # 현재 상태
     status = global_risk.get_status()
@@ -281,6 +385,11 @@ if __name__ == "__main__":
         print(f"\n⚠️ 경고:")
         for w in status['warnings']:
             print(f"  - {w}")
+
+    print(f"\n💰 잔고:")
+    print(f"  초기: {status['balances']['initial']:,.0f}원")
+    print(f"  현재: {status['balances']['current']:,.0f}원")
+    print(f"  최고: {status['balances']['peak']:,.0f}원")
 
     print(f"\n📊 일일 손실: {status['daily_loss']['percent']:.2f}%")
     print(f"🔄 연속 손실: {status['consecutive_losses']['count']}회")
