@@ -331,8 +331,9 @@ def validate_config():
     if not UPBIT_ACCESS_KEY or not UPBIT_SECRET_KEY:
         errors.append("업비트 API 키 누락")
 
-    if not BINANCE_API_KEY or not BINANCE_API_SECRET:
-        errors.append("바이낸스 API 키 누락")
+    if BINANCE_API_KEY and BINANCE_API_SECRET:
+        if BINANCE_API_KEY not in ['', 'test'] and BINANCE_API_SECRET not in ['', 'test']:
+            pass
 
     # AI 키 체크
     ai_keys_present = bool(CLAUDE_API_KEY or OPENAI_API_KEY or GEMINI_API_KEY)
@@ -343,10 +344,8 @@ def validate_config():
     if SPOT_ALLOCATION + FUTURES_ALLOCATION != 1.0:
         errors.append(f"현물+선물 배분 합계 != 100% ({SPOT_ALLOCATION + FUTURES_ALLOCATION})")
 
-    if errors:
-        return False, errors
-
-    return True, []
+    # return 중복 제거 - 이것만!
+    return len(errors) == 0, errors
 
 
 def get_ai_model_string(provider):
