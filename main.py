@@ -2,7 +2,7 @@
 CoinMoney 자동매매 봇 (v3.3 - 동적 포트폴리오)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 [v3.3 핵심 기능]
-1. 📊 동적 포트폴리오 관리 (자금 배분)
+1. 📊 동적 포트폴리오 관리 (실시간 잔고 기반)
 2. 🔥 거래량 기반 코인 발굴
 3. ⚙️ 워커 동적 생성/제거
 4. 💰 개별 워커별 독립 예산
@@ -42,7 +42,7 @@ from traders.futures_trader import futures_trader
 from strategies import (
     strategy_registry,
     futures_strategy_registry,
-    get_strategy  # 🔥 추가!
+    get_strategy
 )
 
 # 뉴스 수집기
@@ -84,9 +84,24 @@ class CoinMoneyBot:
         try:
             self.upbit = pyupbit.Upbit(UPBIT_ACCESS_KEY, UPBIT_SECRET_KEY)
             info("✅ Upbit API 인증 성공")
+
+            # 🔥 실시간 KRW 잔고 조회
+            try:
+                krw_balance = self.upbit.get_balance("KRW")
+                if krw_balance is not None:
+                    info(f"💰 현재 KRW 잔고: {krw_balance:,.0f}원")
+                    self.initial_krw_balance = krw_balance
+                else:
+                    warning("⚠️ KRW 잔고 조회 실패 (None)")
+                    self.initial_krw_balance = 0
+            except Exception as e:
+                error(f"❌ KRW 잔고 조회 오류: {e}")
+                self.initial_krw_balance = 0
+
         except Exception as e:
             error(f"❌ Upbit API 인증 실패: {e}")
             self.upbit = None
+            self.initial_krw_balance = 0
 
         # 바이낸스 선물 인증
         self.binance = None
@@ -116,9 +131,9 @@ class CoinMoneyBot:
         # 3. 포트폴리오 & 워커 시스템
         # ============================================================
 
-        # 포트폴리오 매니저
+        # 🔥 포트폴리오 매니저 (동적 예산 - upbit_instance 전달)
         self.portfolio_manager = PortfolioManager(
-            total_budget=SPOT_BUDGET,
+            upbit_instance=self.upbit,  # ✅ 인스턴스 전달!
             max_coins=5,
             min_score=20.0
         )
@@ -168,7 +183,7 @@ class CoinMoneyBot:
 
         info("=" * 60)
         info("✅ CoinMoney Bot 초기화 완료!")
-        info(f"   💰 포트폴리오 예산: {SPOT_BUDGET:,}원")
+        info(f"   💰 초기 KRW 잔고: {self.initial_krw_balance:,.0f}원")  # 🔥 수정!
         info(f"   ⏰ 포트폴리오 주기: {self.portfolio_interval // 60}분")
         info(f"   📊 워커 체크 주기: {self.spot_check_interval}초")
         info(f"   🌍 시장 감정 주기: {self.market_sentiment_interval // 60}분")
@@ -468,7 +483,7 @@ class CoinMoneyBot:
 
     async def execute_spot_strategies(self, coin, analysis_result, budget):
         """
-        현물 전략 실행 (🔥 완전 수정!)
+        현물 전략 실행
 
         Args:
             coin: 거래 코인
@@ -492,7 +507,7 @@ class CoinMoneyBot:
                 )
             return
 
-        # 🔥 전략 실행 (execute() 메서드 사용)
+        # 전략 실행
         for strategy_name in spot_strategies:
             try:
                 # 전략 가져오기

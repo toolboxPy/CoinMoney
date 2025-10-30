@@ -1,5 +1,5 @@
 """
-마스터 설정 파일 (v3.0 - 이벤트 드리븐 최적화)
+마스터 설정 파일 (v3.3 - 동적 예산)
 """
 import os
 from dotenv import load_dotenv
@@ -30,15 +30,17 @@ TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
 # ============================================================
-# 투자 설정
+# 투자 설정 (🔥 동적 예산으로 변경!)
 # ============================================================
 
-TOTAL_INVESTMENT = 1000000  # 100만원
-SPOT_ALLOCATION = 0.6  # 60% 현물
-FUTURES_ALLOCATION = 0.4  # 40% 선물
+# 🔥 정적 예산 제거 - 실시간 잔고 사용!
+# TOTAL_INVESTMENT = 1000000  # ❌ 사용 안 함
+# SPOT_ALLOCATION = 0.6
+# FUTURES_ALLOCATION = 0.4
+# SPOT_BUDGET = ...  # ❌ 삭제됨!
 
-SPOT_BUDGET = TOTAL_INVESTMENT * SPOT_ALLOCATION
-FUTURES_BUDGET = TOTAL_INVESTMENT * FUTURES_ALLOCATION
+# ✅ 포트폴리오는 실시간 KRW 잔고에서 자동 계산됨
+# main.py에서 upbit.get_balance("KRW")로 조회
 
 # ============================================================
 # 시간 프레임 & 체크 주기
@@ -46,12 +48,12 @@ FUTURES_BUDGET = TOTAL_INVESTMENT * FUTURES_ALLOCATION
 
 TIMEFRAMES = {
     'spot': {
-        'primary': 'minute30',  # 30분봉
+        'primary': 'minute30',
         'secondary': 'minute15',
         'long_term': 'minute60'
     },
     'futures': {
-        'primary': 'minute60',  # 1시간봉
+        'primary': 'minute60',
         'secondary': 'minute30',
         'long_term': 'minute240'
     }
@@ -59,7 +61,7 @@ TIMEFRAMES = {
 
 # 메인 루프 체크 주기 (초)
 CHECK_INTERVALS = {
-    'main_loop': 30,  # 30초마다 로컬 분석
+    'main_loop': 30,
     'spot': 180,
     'futures': 300
 }
@@ -78,7 +80,7 @@ TRADING_COINS = {
 # ============================================================
 
 FUTURES_LEVERAGE = 5
-FUTURES_MARGIN_MODE = "ISOLATED"  # 격리 마진
+FUTURES_MARGIN_MODE = "ISOLATED"
 
 # ============================================================
 # 수수료
@@ -102,16 +104,16 @@ FEES = {
 
 PROFIT_TARGETS = {
     'spot_minute30': {
-        'take_profit_1': 0.015,  # 1.5%
-        'take_profit_2': 0.025,  # 2.5%
-        'stop_loss': -0.02,  # -2%
-        'trailing_stop': 0.01  # 1%
+        'take_profit_1': 0.015,
+        'take_profit_2': 0.025,
+        'stop_loss': -0.02,
+        'trailing_stop': 0.01
     },
     'futures_minute60': {
-        'take_profit_1': 0.02,  # 2%
-        'take_profit_2': 0.03,  # 3%
-        'stop_loss': -0.015,  # -1.5%
-        'trailing_stop': 0.01  # 1%
+        'take_profit_1': 0.02,
+        'take_profit_2': 0.03,
+        'stop_loss': -0.015,
+        'trailing_stop': 0.01
     }
 }
 
@@ -120,9 +122,9 @@ PROFIT_TARGETS = {
 # ============================================================
 
 GLOBAL_RISK = {
-    'daily_loss_limit': 0.05,  # 일일 손실 5%
-    'max_consecutive_losses': 4,  # 연속 손실 4회
-    'account_drawdown_limit': 0.15,  # 계좌 손실 15%
+    'daily_loss_limit': 0.05,
+    'max_consecutive_losses': 4,
+    'account_drawdown_limit': 0.15,
 
     'max_positions': {
         'spot': 2,
@@ -143,12 +145,12 @@ POSITION_SIZING = {
     'spot': {
         'min_investment': 10000,
         'max_investment': 100000,
-        'percent_per_trade': 0.15  # 15%
+        'percent_per_trade': 0.15
     },
     'futures': {
         'min_investment': 10000,
         'max_investment': 80000,
-        'percent_per_trade': 0.2  # 20%
+        'percent_per_trade': 0.2
     }
 }
 
@@ -197,25 +199,17 @@ TECHNICAL_INDICATORS = {
 
 AI_CONFIG = {
     'enabled': True,
-
-    # 사용 가능한 AI
     'providers': ['claude', 'openai', 'gemini'],
-
-    # 투표/가중치 (단순 투표 시)
     'voting_method': 'majority',
     'weights': {
         'claude': 0.4,
         'openai': 0.3,
         'gemini': 0.3
     },
-
-    # 신뢰도 & 타임아웃
     'min_confidence': 0.7,
     'timeout': 10,
     'fallback_on_failure': True,
-
-    # 실패 허용
-    'max_failure_count': 3  # 3회 연속 실패 시 비활성화
+    'max_failure_count': 3
 }
 
 # ============================================================
@@ -223,47 +217,35 @@ AI_CONFIG = {
 # ============================================================
 
 AI_TRIGGER_CONFIG = {
-    # 시장 급변 트리거
-    'price_change_5m': 3.0,       # 5분간 3% 이상
-    'price_change_1h': 5.0,       # 1시간 5% 이상
-    'volume_surge': 2.5,          # 평균 대비 2.5배
-    'volatility': 5.0,            # 변동성 5%
-
-    # 기술적 이벤트
+    'price_change_5m': 3.0,
+    'price_change_1h': 5.0,
+    'volume_surge': 2.5,
+    'volatility': 5.0,
     'pattern_score': 7.0,
-    'support_resistance': 0.02,   # 2% 이내
+    'support_resistance': 0.02,
     'indicator_conflict': 3.0,
-
-    # 뉴스 이벤트
-    'news_urgency': 6.5,          # 중요도 6.5 이상
-    'news_count_1h': 5,           # 1시간 5개 이상
-
-    # 포지션 위기
-    'position_risk': 0.8,         # 리스크 80%
-    'pnl_critical': 0.02,         # 손익 ±2%
-
-    # 🎯 AI 호출 임계값 (핵심!)
-    'call_threshold': 50.0        # 50점 이상이면 호출
+    'news_urgency': 6.5,
+    'news_count_1h': 5,
+    'position_risk': 0.8,
+    'pnl_critical': 0.02,
+    'call_threshold': 50.0
 }
 
-# 최소 호출 간격 (초)
-AI_MIN_INTERVAL = 180  # 3분 (긴급 제외)
+AI_MIN_INTERVAL = 180
 
 # ============================================================
 # AI 토론 설정 (v2.0)
 # ============================================================
 
 AI_DEBATE_V2_CONFIG = {
-    'rounds': 2,                    # 2라운드 (빠르고 효율적)
-    'compression': True,            # 압축 프로토콜
-    'min_agreement': 0.7,           # 합의 임계값
-
-    # 🔥 AI 선택적 사용 (비용 최적화)
+    'rounds': 2,
+    'compression': True,
+    'min_agreement': 0.7,
     'adaptive_ai_selection': True,
     'ai_selection_rules': {
-        'normal': ['gemini'],                       # 평상시 (저렴)
-        'important': ['claude', 'gemini'],          # 중요 (품질)
-        'emergency': ['claude', 'openai', 'gemini'] # 긴급 (전부)
+        'normal': ['gemini'],
+        'important': ['claude', 'gemini'],
+        'emergency': ['claude', 'openai', 'gemini']
     }
 }
 
@@ -275,7 +257,6 @@ TELEGRAM = {
     'enabled': True,
     'bot_token': TELEGRAM_BOT_TOKEN,
     'chat_id': TELEGRAM_CHAT_ID,
-
     'notify': {
         'trade': True,
         'risk': True,
@@ -283,9 +264,7 @@ TELEGRAM = {
         'ai': True,
         'daily_report': True
     },
-
-    # 승인 모드
-    'approval_mode': 'opt_out',  # 'opt_in' | 'opt_out' | 'none'
+    'approval_mode': 'opt_out',
     'approval_timeout': 10,
     'approval_threshold': {
         'spot': 50000,
@@ -301,13 +280,13 @@ STATE_FILE = 'data/state.json'
 
 CONNECTION_RETRY = {
     'max_retries': 4,
-    'delays': [3, 10, 30, 60]  # 초
+    'delays': [3, 10, 30, 60]
 }
 
 LOGGING = {
     'level': 'INFO',
     'file': 'data/logs/trading.log',
-    'max_size': 10 * 1024 * 1024,  # 10MB
+    'max_size': 10 * 1024 * 1024,
     'backup_count': 5
 }
 
@@ -315,7 +294,7 @@ LOGGING = {
 # 시스템 버전
 # ============================================================
 
-SYSTEM_VERSION = "v3.0_event_driven"
+SYSTEM_VERSION = "v3.3_dynamic_budget"
 SYSTEM_NAME = "CoinMoney AI Trading Bot"
 
 
@@ -327,24 +306,13 @@ def validate_config():
     """설정 유효성 검증"""
     errors = []
 
-    # API 키 체크
     if not UPBIT_ACCESS_KEY or not UPBIT_SECRET_KEY:
         errors.append("업비트 API 키 누락")
 
-    if BINANCE_API_KEY and BINANCE_API_SECRET:
-        if BINANCE_API_KEY not in ['', 'test'] and BINANCE_API_SECRET not in ['', 'test']:
-            pass
-
-    # AI 키 체크
     ai_keys_present = bool(CLAUDE_API_KEY or OPENAI_API_KEY or GEMINI_API_KEY)
     if AI_CONFIG['enabled'] and not ai_keys_present:
         errors.append("AI 활성화되었으나 API 키 없음")
 
-    # 투자 설정 체크
-    if SPOT_ALLOCATION + FUTURES_ALLOCATION != 1.0:
-        errors.append(f"현물+선물 배분 합계 != 100% ({SPOT_ALLOCATION + FUTURES_ALLOCATION})")
-
-    # return 중복 제거 - 이것만!
     return len(errors) == 0, errors
 
 
@@ -366,9 +334,7 @@ def get_config_summary():
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 💰 투자 설정:
-   총 투자금: {TOTAL_INVESTMENT:,}원
-   현물: {SPOT_BUDGET:,}원 ({SPOT_ALLOCATION*100:.0f}%)
-   선물: {FUTURES_BUDGET:,}원 ({FUTURES_ALLOCATION*100:.0f}%)
+   예산: 실시간 KRW 잔고 사용 (동적)
 
 🎯 거래 코인:
    현물: {', '.join(TRADING_COINS['spot'])}
@@ -395,14 +361,8 @@ def get_config_summary():
     return summary
 
 
-# ============================================================
-# 테스트/검증
-# ============================================================
-
 if __name__ == "__main__":
     print("🧪 설정 파일 검증\n")
-
-    # 설정 유효성 검증
     is_valid, errors = validate_config()
 
     if is_valid:

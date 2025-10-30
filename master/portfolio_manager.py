@@ -6,7 +6,7 @@
 2. 거래량 급증 코인 발굴
 3. 🤖 AI 자문: 코인 선택 + 배분 비율 결정
 4. 💳 크레딧 시스템: 무분별한 AI 호출 방지
-5. 동적 자금 배분 (좋은 코인에 더 많이)
+5. 동적 자금 배분 (실시간 KRW 잔고 기반)
 6. 포트폴리오 리밸런싱
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
@@ -15,7 +15,6 @@ import asyncio
 import json
 import random
 from datetime import datetime, timedelta
-from config.master_config import SPOT_BUDGET
 from utils.logger import info, warning, error
 from analysis.technical import technical_analyzer
 
@@ -32,56 +31,72 @@ except ImportError as e:
 
 class PortfolioManager:
     """
-    AI 통합 포트폴리오 매니저
+    AI 통합 포트폴리오 매니저 (동적 예산)
 
     - 전체 시장 분석
     - AI 자문: 코인 선택 + 배분
     - 크레딧 관리
+    - 실시간 KRW 잔고 기반
     """
 
-    def __init__(self, total_budget=SPOT_BUDGET, max_coins=5, min_score=20.0):
+    def __init__(self, upbit_instance, max_coins=5, min_score=20.0):
         """
         포트폴리오 매니저 초기화
 
         Args:
-            total_budget: 총 투자 예산
+            upbit_instance: Upbit API 인스턴스 (실시간 잔고 조회용)
             max_coins: 최대 코인 수
-            min_score: 최소 점수 기준 (50 → 20으로 완화)
+            min_score: 최소 점수 기준
         """
+        # 🔥 Upbit 인스턴스 저장 (잔고 조회용)
+        self.upbit = upbit_instance
+
         # 기본 설정
-        self.total_budget = total_budget
         self.max_coins = max_coins
         self.min_score = min_score
 
         # 포트폴리오 상태
-        self.allocations = {}  # {coin: allocated_amount}
-        self.coin_scores = {}  # {coin: score}
-        self.coin_data = {}  # {coin: market_data}
+        self.allocations = {}
+        self.coin_scores = {}
+        self.coin_data = {}
         self.current_allocation = {}
 
         # 배분 설정
-        self.min_allocation = 0.05  # 최소 5%
-        self.max_allocation = 0.40  # 최대 40%
+        self.min_allocation = 0.05
+        self.max_allocation = 0.40
 
         # 거래량 급증 감지
-        self.volume_surge_threshold = 3.0  # 평균 대비 3배
-        self.volume_history = {}  # {coin: [volumes]}
+        self.volume_surge_threshold = 3.0
+        self.volume_history = {}
 
-        # 메인 코인 (항상 포함 고려)
+        # 메인 코인
         self.core_coins = ['KRW-BTC', 'KRW-ETH']
 
-        # 제외 코인 (스테이블코인, 레버리지 등)
+        # 제외 코인
         self.excluded_coins = [
-            'KRW-USDT', 'KRW-USDC', 'KRW-DAI',  # 스테이블
-            'KRW-WBTC', 'KRW-WEMIX',  # 래핑
+            'KRW-USDT', 'KRW-USDC', 'KRW-DAI',
+            'KRW-WBTC', 'KRW-WEMIX',
         ]
 
         info("💼 포트폴리오 매니저 초기화 완료")
-        info(f"   총 예산: {self.total_budget:,}원")
         info(f"   최대 코인 수: {self.max_coins}개")
         info(f"   최소 점수 기준: {self.min_score}점")
         if AI_AVAILABLE:
             info(f"   💳 AI 크레딧: {credit_system.get_remaining()}/{credit_system.daily_limit}")
+
+    def get_current_budget(self):
+        """
+        실시간 KRW 잔고 조회
+
+        Returns:
+            float: 현재 KRW 잔고
+        """
+        try:
+            krw_balance = self.upbit.get_balance("KRW")
+            return krw_balance if krw_balance else 0
+        except Exception as e:
+            error(f"❌ 잔고 조회 오류: {e}")
+            return 0
 
     async def scan_all_coins(self):
         """
@@ -92,14 +107,12 @@ class PortfolioManager:
             info("🔍 전체 시장 스캔 시작")
             info("=" * 60)
 
-            # 모든 KRW 코인 가져오기
             all_tickers = await asyncio.to_thread(pyupbit.get_tickers, fiat="KRW")
 
             if not all_tickers:
                 warning("⚠️ 코인 목록 조회 실패")
                 return []
 
-            # 제외 코인 필터링
             valid_tickers = [
                 t for t in all_tickers
                 if t not in self.excluded_coins
@@ -107,12 +120,10 @@ class PortfolioManager:
 
             info(f"📊 스캔 대상: {len(valid_tickers)}개 코인")
 
-            # 각 코인 분석
             analyzed_coins = []
             failed_count = 0
             debug_count = 0
 
-            # 🔥 실패 원인 추적
             fail_reasons = {
                 'no_data': 0,
                 'below_threshold': 0,
@@ -124,22 +135,15 @@ class PortfolioManager:
                     coin_data = await self._analyze_coin(ticker)
 
                     if coin_data:
-                        # 점수 체크
                         if coin_data['score'] >= self.min_score:
                             analyzed_coins.append(coin_data)
 
-                            # 디버그 출력 (처음 10개만)
                             if debug_count < 10:
                                 info(f"✅ [{ticker}] 통과! 점수: {coin_data['score']:.1f}")
                                 debug_count += 1
                         else:
                             failed_count += 1
                             fail_reasons['below_threshold'] += 1
-
-                            # 샘플 출력
-                            if debug_count < 10:
-                                warning(f"❌ [{ticker}] 점수 미달: {coin_data['score']:.1f} < {self.min_score}")
-                                debug_count += 1
                     else:
                         failed_count += 1
                         fail_reasons['no_data'] += 1
@@ -147,12 +151,8 @@ class PortfolioManager:
                 except Exception as e:
                     failed_count += 1
                     fail_reasons['exception'] += 1
-                    if debug_count < 10:
-                        error(f"❌ [{ticker}] 예외: {e}")
-                        debug_count += 1
                     continue
 
-            # 🔥 상세 통계
             info(f"\n✅ 분석 완료:")
             info(f"   유효: {len(analyzed_coins)}개")
             info(f"   실패: {failed_count}개")
@@ -164,14 +164,9 @@ class PortfolioManager:
                 error("\n❌ 유효한 코인 0개!")
                 error(f"   최소 점수 기준: {self.min_score}점")
                 error(f"   → 모든 코인이 데이터 없음 또는 조건 미달")
-                error(f"   → 거래량 기준: 100만원 이상")
-                error(f"   → 차트 데이터: 20개 이상")
                 return []
 
-            # 점수순 정렬
             analyzed_coins.sort(key=lambda x: x['score'], reverse=True)
-
-            # 상위 10개 선정
             top_10 = analyzed_coins[:10]
 
             info(f"\n📋 상위 10개 후보:")
@@ -190,28 +185,16 @@ class PortfolioManager:
             return []
 
     async def _analyze_coin(self, ticker):
-        """
-        개별 코인 분석 (안전 버전)
-
-        Args:
-            ticker: 코인 티커 (예: 'KRW-BTC')
-
-        Returns:
-            dict or None: 코인 데이터
-        """
+        """개별 코인 분석 (안전 버전)"""
         try:
-            # 현재가
             current_price = await asyncio.to_thread(
                 pyupbit.get_current_price,
                 ticker
             )
 
             if not current_price or current_price < 100:
-                if random.random() < 0.01:  # 1% 로그
-                    warning(f"[{ticker}] 가격 없음 또는 100원 미만")
                 return None
 
-            # OHLCV 데이터 (1시간봉 24개)
             df = await asyncio.to_thread(
                 pyupbit.get_ohlcv,
                 ticker,
@@ -220,51 +203,34 @@ class PortfolioManager:
             )
 
             if df is None or len(df) < 20:
-                if random.random() < 0.01:  # 1% 로그
-                    warning(f"[{ticker}] 차트 데이터 부족")
                 return None
 
-            # 거래량 (24시간)
             volume_24h = df['value'].sum()
 
-            # 🔥 디버그: 거래량 출력 (5% 확률)
-            if random.random() < 0.05:
-                info(f"[{ticker}] 거래량: {volume_24h:,.0f}원")
-
-            # 🔥 완화: 100만원으로 낮춤
             if volume_24h < 1_000_000:
                 return None
 
-            # 거래량 비율
             recent_volume = df['volume'].iloc[-1]
             avg_volume = df['volume'].iloc[-24:-1].mean()
             volume_ratio = recent_volume / avg_volume if avg_volume > 0 else 1.0
 
-            # 가격 변화율
             price_change_1h = (df['close'].iloc[-1] - df['close'].iloc[-2]) / df['close'].iloc[-2]
             price_change_24h = (df['close'].iloc[-1] - df['close'].iloc[0]) / df['close'].iloc[0]
 
-            # 변동성
             volatility = (df['high'] / df['low'] - 1).mean()
 
-            # 🔥 기술적 분석 (안전하게)
+            # 🔥 기술 분석 (안전하게)
             technical_score = 0
             try:
                 technical = technical_analyzer.analyze(df)
                 if technical is None or not isinstance(technical, dict):
                     technical_score = 0
-                    if random.random() < 0.05:
-                        warning(f"[{ticker}] 기술 분석 None 반환")
                 else:
                     technical_score = technical.get('score', 0)
-                    if random.random() < 0.05:
-                        info(f"[{ticker}] 기술점수: {technical_score:.1f}/5")
             except Exception as e:
                 technical_score = 0
-                if random.random() < 0.05:
-                    error(f"[{ticker}] 기술 분석 예외: {e}")
 
-            # 모멘텀 판단
+            # 모멘텀
             if price_change_24h > 0.05:
                 momentum = 'STRONG_UP'
             elif price_change_24h > 0.02:
@@ -276,26 +242,26 @@ class PortfolioManager:
             else:
                 momentum = 'STRONG_DOWN'
 
-            # 🔥 종합 점수 (0~100)
+            # 점수 계산
             score = 0.0
 
-            # 1. 기술 점수 (30점)
-            tech_points = technical_score * 6  # 5점 만점 → 30점
+            # 1. 기술 (30점)
+            tech_points = technical_score * 6
             score += tech_points
 
             # 2. 거래량 (40점)
-            if volume_24h > 100_000_000_000:  # 1000억+
+            if volume_24h > 100_000_000_000:
                 vol_points = 40
-            elif volume_24h > 50_000_000_000:  # 500억+
+            elif volume_24h > 50_000_000_000:
                 vol_points = 35
-            elif volume_24h > 10_000_000_000:  # 100억+
+            elif volume_24h > 10_000_000_000:
                 vol_points = 30
-            elif volume_24h > 1_000_000_000:  # 10억+
+            elif volume_24h > 1_000_000_000:
                 vol_points = 25
-            elif volume_24h > 100_000_000:  # 1억+
+            elif volume_24h > 100_000_000:
                 vol_points = 20
             else:
-                vol_points = 15  # 최소 점수 보장
+                vol_points = 15
 
             score += vol_points
 
@@ -321,16 +287,6 @@ class PortfolioManager:
 
             score += vol_points_2
 
-            # 🔥 디버그: 점수 상세 출력 (10% 확률)
-            if random.random() < 0.1:
-                info(f"\n🔍 [{ticker}] 상세 점수:")
-                info(f"   기술: {tech_points:.1f}점 (score={technical_score:.1f})")
-                info(f"   거래량: {vol_points}점 (vol={volume_24h / 1e9:.2f}B)")
-                info(f"   모멘텀: {mom_points}점 ({momentum})")
-                info(f"   변동성: {vol_points_2}점 ({volatility:.3f})")
-                info(f"   ━━━━━━━━━━━━━━━━━━━━━━")
-                info(f"   최종: {score:.1f}점")
-
             return {
                 'ticker': ticker,
                 'score': score,
@@ -345,65 +301,37 @@ class PortfolioManager:
             }
 
         except Exception as e:
-            # 🔥 예외도 로깅 (5% 확률)
-            if random.random() < 0.05:
-                error(f"[{ticker}] 분석 최종 예외: {type(e).__name__}: {e}")
             return None
 
     async def ai_select_portfolio(self, top_10_candidates):
-        """
-        🤖 AI가 포트폴리오 선택
-
-        Args:
-            top_10_candidates: 상위 10개 후보
-
-        Returns:
-            {
-                'selected': [
-                    {
-                        'ticker': 'KRW-BTC',
-                        'allocation': 0.4,
-                        'reasoning': '...'
-                    },
-                    ...
-                ],
-                'ai_confidence': 0.85,
-                'reasoning': '전체 전략...'
-            }
-        """
+        """🤖 AI가 포트폴리오 선택"""
         try:
             info("\n" + "=" * 60)
             info("🤖 AI 포트폴리오 자문 시작")
             info("=" * 60)
 
-            # 1. 크레딧 체크
             if not credit_system.can_use('single_ai'):
                 warning("⚠️ AI 크레딧 부족! 기본 알고리즘 사용")
                 return self._default_ai_selection(top_10_candidates)
 
-            # 2. 프롬프트 작성
             prompt = self._build_ai_prompt(top_10_candidates)
 
-            # 3. AI 호출 (간단한 버전)
             info(f"🤖 AI 자문 중...")
             info(f"💳 크레딧 소비: 1")
 
             credit_system.use_credit('single_ai', '포트폴리오 선택')
 
-            # 단순 AI 호출
             ai_response_text = await self._call_ai(prompt)
 
             if not ai_response_text:
                 warning("⚠️ AI 응답 없음")
                 return self._default_ai_selection(top_10_candidates)
 
-            # 4. 결과 파싱
             ai_response = self._parse_ai_response(
                 ai_response_text,
                 top_10_candidates
             )
 
-            # 5. 출력
             info(f"\n✅ AI 선택 완료!")
             info(f"   선택: {len(ai_response['selected'])}개 코인")
             info(f"   신뢰도: {ai_response['ai_confidence'] * 100:.0f}%")
@@ -423,20 +351,10 @@ class PortfolioManager:
             return self._default_ai_selection(top_10_candidates)
 
     async def _call_ai(self, prompt):
-        """
-        AI 호출 (단순 버전)
-
-        Args:
-            prompt: AI에게 보낼 프롬프트
-
-        Returns:
-            str: AI 응답
-        """
+        """AI 호출"""
         try:
-            # multi_ai_analyzer 사용
             from ai.multi_ai_analyzer import multi_ai_analyzer
 
-            # 비동기 분석
             result = await asyncio.to_thread(
                 multi_ai_analyzer.analyze_sync,
                 ticker="PORTFOLIO",
@@ -454,8 +372,6 @@ class PortfolioManager:
 
     def _build_ai_prompt(self, candidates):
         """AI 프롬프트 작성"""
-
-        # 후보 요약
         candidates_text = "\n".join([
             f"{i+1}. {c['ticker']}: Score={c['score']:.1f} "
             f"Vol24h={c['volume_24h']/1e9:.1f}B Change24h={c['change_24h']:+.1f}% "
@@ -463,10 +379,13 @@ class PortfolioManager:
             for i, c in enumerate(candidates)
         ])
 
+        # 🔥 실시간 예산 조회
+        current_budget = self.get_current_budget()
+
         prompt = f"""
 You are a crypto portfolio manager. Select 3-5 coins from these top 10 candidates.
 
-Budget: {self.total_budget:,} KRW
+Budget: {current_budget:,} KRW (real-time balance)
 Goal: Maximize profit with risk diversification
 
 CANDIDATES:
@@ -495,7 +414,6 @@ Return ONLY the JSON. No explanation before or after.
     def _parse_ai_response(self, response_text, candidates):
         """AI 응답 파싱"""
         try:
-            # JSON 추출
             start = response_text.find('{')
             end = response_text.rfind('}') + 1
 
@@ -512,7 +430,6 @@ Return ONLY the JSON. No explanation before or after.
                 warning("⚠️ 선택 코인 없음")
                 return self._default_ai_selection(candidates)
 
-            # 결과 구성
             result = {
                 'selected': [],
                 'ai_confidence': data.get('confidence', 0.7),
@@ -534,7 +451,6 @@ Return ONLY the JSON. No explanation before or after.
                     })
                     total_allocation += allocation
 
-            # 비율 정규화 (합이 정확히 1.0이 되도록)
             if total_allocation > 0 and abs(total_allocation - 1.0) > 0.01:
                 for coin in result['selected']:
                     coin['allocation'] /= total_allocation
@@ -549,10 +465,7 @@ Return ONLY the JSON. No explanation before or after.
         """기본 선택 (AI 없이)"""
         info("⚙️ 기본 알고리즘 사용")
 
-        # 상위 3개 선택
         top_3 = candidates[:3]
-
-        # 점수 비례 배분
         total_score = sum(c['score'] for c in top_3)
 
         result = {
@@ -573,29 +486,22 @@ Return ONLY the JSON. No explanation before or after.
 
     async def analyze_and_allocate(self, market_sentiment):
         """
-        전체 시장 분석 + AI 자문 + 자금 배분
-
-        Returns:
-            {
-                'allocations': {
-                    'KRW-BTC': {
-                        'budget': 20000,
-                        'allocation': 0.4,
-                        'score': 85.5,
-                        'reasoning': '...'
-                    },
-                    ...
-                },
-                'total_analyzed': 200,
-                'ai_used': True
-            }
+        전체 시장 분석 + AI 자문 + 자금 배분 (🔥 실시간 예산)
         """
         try:
             info("\n" + "=" * 60)
             info("💼 포트폴리오 분석 + AI 자문")
             info("=" * 60)
 
-            # 1. 전체 시장 스캔 → 상위 10개
+            # 🔥 실시간 예산 조회
+            current_budget = self.get_current_budget()
+            info(f"💰 현재 사용 가능 예산: {current_budget:,.0f}원")
+
+            if current_budget < 10000:
+                error("❌ 예산 부족 (10,000원 미만)")
+                return None
+
+            # 1. 전체 시장 스캔
             top_10 = await self.scan_all_coins()
 
             if not top_10 or len(top_10) == 0:
@@ -606,22 +512,22 @@ Return ONLY the JSON. No explanation before or after.
             if AI_AVAILABLE and credit_system.get_remaining() >= 1:
                 ai_result = await self.ai_select_portfolio(top_10)
             else:
-                warning("⚠️ AI 미사용 (크레딧 부족 또는 비활성)")
+                warning("⚠️ AI 미사용")
                 ai_result = self._default_ai_selection(top_10)
 
             if not ai_result or not ai_result.get('selected'):
                 error("❌ AI 선택 실패")
                 return None
 
-            # 3. 예산 배분
+            # 3. 예산 배분 (🔥 실시간 예산 사용)
             allocations = {}
 
-            info(f"\n💰 자금 배분:")
+            info(f"\n💰 자금 배분 (총 예산: {current_budget:,.0f}원):")
 
             for coin_info in ai_result['selected']:
                 ticker = coin_info['ticker']
                 allocation_pct = coin_info['allocation']
-                budget = int(self.total_budget * allocation_pct)
+                budget = int(current_budget * allocation_pct)  # 🔥 동적!
 
                 allocations[ticker] = {
                     'budget': budget,
@@ -639,6 +545,7 @@ Return ONLY the JSON. No explanation before or after.
             return {
                 'allocations': allocations,
                 'total_analyzed': len(top_10),
+                'current_budget': current_budget,  # 🔥 실제 예산 포함
                 'ai_used': AI_AVAILABLE,
                 'ai_confidence': ai_result.get('ai_confidence', 0),
                 'reasoning': ai_result.get('reasoning', '')
@@ -656,38 +563,23 @@ Return ONLY the JSON. No explanation before or after.
 # ============================================================
 
 class DynamicWorkerManager:
-    """
-    동적 워커 관리자
-
-    - 워커 동적 생성/제거
-    - 자금 배분 관리
-    """
+    """동적 워커 관리자"""
 
     def __init__(self, bot_instance):
         self.bot = bot_instance
-        self.active_workers = {}  # {ticker: task}
-        self.worker_budgets = {}  # {ticker: budget}
+        self.active_workers = {}
+        self.worker_budgets = {}
 
         info("⚙️ 동적 워커 매니저 초기화")
 
     async def update_workers(self, allocations):
-        """
-        워커 업데이트 (추가/제거/예산변경)
-
-        Args:
-            allocations: 새로운 배분 {ticker: amount}
-        """
+        """워커 업데이트 (추가/제거/예산변경)"""
         try:
             current_coins = set(self.active_workers.keys())
             target_coins = set(allocations.keys())
 
-            # 추가할 코인
             coins_to_add = target_coins - current_coins
-
-            # 제거할 코인
             coins_to_remove = current_coins - target_coins
-
-            # 유지할 코인 (예산 변경)
             coins_to_update = current_coins & target_coins
 
             info(f"\n⚙️ 워커 업데이트:")
@@ -695,16 +587,13 @@ class DynamicWorkerManager:
             info(f"   제거: {len(coins_to_remove)}개")
             info(f"   유지: {len(coins_to_update)}개")
 
-            # 1. 워커 추가
             for ticker in coins_to_add:
                 budget = allocations[ticker]
                 await self.add_worker(ticker, budget)
 
-            # 2. 워커 제거
             for ticker in coins_to_remove:
                 await self.remove_worker(ticker)
 
-            # 3. 예산 업데이트
             for ticker in coins_to_update:
                 new_budget = allocations[ticker]
                 old_budget = self.worker_budgets.get(ticker, 0)
@@ -717,13 +606,7 @@ class DynamicWorkerManager:
             error(f"❌ 워커 업데이트 오류: {e}")
 
     async def add_worker(self, ticker, budget):
-        """
-        워커 추가
-
-        Args:
-            ticker: 코인 티커
-            budget: 배분 예산
-        """
+        """워커 추가"""
         if ticker in self.active_workers:
             warning(f"⚠️ [{ticker}] 이미 워커 존재")
             return
@@ -731,7 +614,6 @@ class DynamicWorkerManager:
         try:
             info(f"🆕 [{ticker}] 워커 생성 (예산: {budget:,}원)")
 
-            # 워커 태스크 생성
             task = asyncio.create_task(
                 self.bot.spot_worker(ticker, budget)
             )
@@ -745,23 +627,16 @@ class DynamicWorkerManager:
             error(f"❌ [{ticker}] 워커 생성 오류: {e}")
 
     async def remove_worker(self, ticker):
-        """
-        워커 제거
-
-        Args:
-            ticker: 코인 티커
-        """
+        """워커 제거"""
         if ticker not in self.active_workers:
             return
 
         try:
             info(f"🗑️ [{ticker}] 워커 제거 중...")
 
-            # 워커 중단
             task = self.active_workers[ticker]
             task.cancel()
 
-            # 제거
             del self.active_workers[ticker]
             del self.worker_budgets[ticker]
 
@@ -787,24 +662,28 @@ async def test_portfolio_manager():
     """포트폴리오 매니저 테스트"""
     print("🧪 AI 포트폴리오 매니저 테스트\n")
 
-    pm = PortfolioManager(total_budget=50000)
+    import pyupbit
+    upbit = pyupbit.Upbit("test", "test")
 
-    # 가짜 시장 상태
+    pm = PortfolioManager(
+        upbit_instance=upbit,
+        max_coins=5,
+        min_score=20.0
+    )
+
     market_sentiment = {
         'status': 'BULLISH',
         'score': 3.5
     }
 
-    # 분석 및 배분
     result = await pm.analyze_and_allocate(market_sentiment)
 
     if result:
         print("\n✅ 테스트 성공!")
         print(f"   분석 코인: {result['total_analyzed']}개")
         print(f"   배분 코인: {len(result['allocations'])}개")
+        print(f"   실시간 예산: {result['current_budget']:,}원")
         print(f"   AI 사용: {'✅' if result['ai_used'] else '❌'}")
-        if result['ai_used']:
-            print(f"   신뢰도: {result['ai_confidence'] * 100:.0f}%")
     else:
         print("\n❌ 테스트 실패")
 
