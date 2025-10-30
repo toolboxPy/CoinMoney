@@ -177,15 +177,16 @@ class MultiAIAnalyzer:
         return final_decision
 
     # 🔥 동기 호출 별칭 (컨트롤러 호환성)
-    def analyze_sync(self, coin=None, ticker=None, df=None, news_list=None):
+    def analyze_sync(self, coin=None, ticker=None, df=None, news_list=None, **kwargs):
         """
-        동기 분석 (컨트롤러 호환)
+        동기 분석 (컨트롤러 호환 - 모든 파라미터 받음)
 
         Args:
-            coin: 코인 티커 (예: "KRW-BTC") - 호환성
-            ticker: 코인 티커 (예: "KRW-BTC") - 호환성
+            coin: 코인 티커 (예: "KRW-BTC")
+            ticker: 코인 티커 (예: "KRW-BTC")
             df: OHLCV DataFrame
-            news_list: 뉴스 리스트 (선택)
+            news_list: 뉴스 리스트
+            **kwargs: 기타 파라미터 (무시)
 
         Returns:
             dict: 분석 결과
