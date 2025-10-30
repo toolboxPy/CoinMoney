@@ -148,57 +148,61 @@ class CoinMoneyBot:
     # ========================================
 
     async def portfolio_worker(self):
-        """
-        포트폴리오 관리 워커 (30분마다)
+        """포트폴리오 관리 워커 (30분 주기)"""
 
-        - 전체 시장 스캔
-        - 거래량 급증 코인 발굴
-        - 자금 동적 배분
-        - 워커 동적 생성/제거
-        """
         info("💼 포트폴리오 워커 시작")
-
-        # 시작 시 한번 실행
-        await asyncio.sleep(10)  # 10초 대기 (다른 워커 시작 후)
 
         while True:
             try:
-                info("\n" + "="*60)
+                info("\n" + "=" * 60)
                 info("💼 포트폴리오 분석 시작")
-                info("="*60)
+                info("=" * 60)
 
-                # 1. 전체 시장 분석 + 자금 배분
+                # 1. 시장 감정
+                market_sentiment = self.market_sentiment
+
+                # 2. 전체 시장 분석 + 자금 배분
                 result = await self.portfolio_manager.analyze_and_allocate(
-                    self.market_sentiment
+                    market_sentiment
                 )
 
-                if result:
-                    allocations = result['allocations']
-                    surge_coins = result['surge_coins']
+                if not result:
+                    warning("⚠️ 포트폴리오 분석 실패")
+                    await asyncio.sleep(300)
+                    continue
 
-                    # 거래량 급증 코인 알림
-                    if surge_coins:
-                        info(f"\n🔥 거래량 급증 감지: {len(surge_coins)}개")
-                        for coin in surge_coins[:3]:
-                            info(f"   {coin['ticker']}: {coin['volume_ratio']:.1f}배")
+                # 3. Budget 추출
+                allocations = result['allocations']
 
-                    # 2. 워커 업데이트 (추가/제거/예산변경)
-                    await self.worker_manager.update_workers(allocations)
+                # dict에서 숫자만 추출
+                budget_only = {
+                    ticker: alloc['budget']
+                    for ticker, alloc in allocations.items()
+                }
 
-                    self.last_portfolio_update = datetime.now()
+                # 4. 워커 업데이트 (추가/제거/변경)
+                await self.dynamic_workers.update_workers(budget_only)
 
-                info("="*60)
+                # 5. 완료
+                info(f"\n✅ 포트폴리오 업데이트 완료")
+                info(f"   활성 워커: {len(budget_only)}개")
+                info(f"   다음 분석: {self.portfolio_interval / 60:.0f}분 후")
+                info("=" * 60 + "\n")
 
-                # 30분 대기
-                await asyncio.sleep(1800)
+                # 6. 대기 (30분)
+                await asyncio.sleep(self.portfolio_interval)
 
             except asyncio.CancelledError:
                 info("🛑 포트폴리오 워커 종료")
                 break
 
             except Exception as e:
-                error(f"⚠️ 포트폴리오 워커 오류: {e}")
-                await asyncio.sleep(300)  # 5분 후 재시도
+                error(f"\n❌ 포트폴리오 워커 오류: {e}")
+                import traceback
+                error(traceback.format_exc())
+
+                # 5분 후 재시도
+                await asyncio.sleep(300)
 
     # ========================================
     # 시장 감정 워커
