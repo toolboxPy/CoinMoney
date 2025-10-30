@@ -431,6 +431,82 @@ class PortfolioManager:
             error("\n스택 트레이스:")
             error(traceback.format_exc())
             return None
+    def _calculate_coin_score(self, coin, df, market_sentiment):
+        """코인 점수 계산 (상세 로그 포함)"""
+        try:
+            score = 0
+            result = {
+                'volume': 0,
+                'volume_score': 0,
+                'volatility': 0,
+                'volatility_score': 0,
+                'trend_score': 0,
+                'total_score': 0
+            }
+
+            # 1. 거래량 점수 (0-30점)
+            if 'value' in df.columns:
+                volume_24h = df['value'].iloc[-1]
+                result['volume'] = volume_24h
+
+                if volume_24h > 100_000_000_000:  # 1000억+
+                    result['volume_score'] = 30
+                elif volume_24h > 50_000_000_000:  # 500억+
+                    result['volume_score'] = 25
+                elif volume_24h > 10_000_000_000:  # 100억+
+                    result['volume_score'] = 20
+                elif volume_24h > 5_000_000_000:  # 50억+
+                    result['volume_score'] = 15
+                elif volume_24h > 1_000_000_000:  # 10억+
+                    result['volume_score'] = 10
+                else:
+                    result['volume_score'] = 5
+
+            score += result['volume_score']
+
+            # 2. 변동성 점수 (0-30점)
+            if 'high' in df.columns and 'low' in df.columns:
+                volatility = (df['high'] / df['low'] - 1).mean()
+                result['volatility'] = volatility
+
+                if 0.02 < volatility < 0.10:  # 2-10% (이상적)
+                    result['volatility_score'] = 30
+                elif 0.01 < volatility < 0.15:  # 1-15%
+                    result['volatility_score'] = 20
+                elif 0.005 < volatility < 0.20:  # 0.5-20%
+                    result['volatility_score'] = 10
+                else:
+                    result['volatility_score'] = 5
+
+            score += result['volatility_score']
+
+            # 3. 추세 점수 (0-40점)
+            if 'close' in df.columns:
+                close = df['close']
+
+                # 이동평균
+                if len(close) >= 20:
+                    ma_20 = close.rolling(20).mean()
+
+                    if close.iloc[-1] > ma_20.iloc[-1]:
+                        result['trend_score'] += 20
+
+                    # 상승 추세
+                    if close.iloc[-1] > close.iloc[-5]:
+                        result['trend_score'] += 10
+
+                    # 강한 상승
+                    if close.iloc[-1] > close.iloc[-10]:
+                        result['trend_score'] += 10
+
+            score += result['trend_score']
+
+            result['total_score'] = score
+            return result
+
+        except Exception as e:
+            error(f"❌ [{coin}] 점수 계산 오류: {type(e).__name__}: {str(e)}")
+            return None
 
     def should_rebalance(self):
         """
@@ -595,82 +671,7 @@ class DynamicWorkerManager:
         """활성 코인 목록"""
         return list(self.active_workers.keys())
 
-    def _calculate_coin_score(self, coin, df, market_sentiment):
-        """코인 점수 계산 (상세 로그 포함)"""
-        try:
-            score = 0
-            result = {
-                'volume': 0,
-                'volume_score': 0,
-                'volatility': 0,
-                'volatility_score': 0,
-                'trend_score': 0,
-                'total_score': 0
-            }
 
-            # 1. 거래량 점수 (0-30점)
-            if 'value' in df.columns:
-                volume_24h = df['value'].iloc[-1]
-                result['volume'] = volume_24h
-
-                if volume_24h > 100_000_000_000:  # 1000억+
-                    result['volume_score'] = 30
-                elif volume_24h > 50_000_000_000:  # 500억+
-                    result['volume_score'] = 25
-                elif volume_24h > 10_000_000_000:  # 100억+
-                    result['volume_score'] = 20
-                elif volume_24h > 5_000_000_000:  # 50억+
-                    result['volume_score'] = 15
-                elif volume_24h > 1_000_000_000:  # 10억+
-                    result['volume_score'] = 10
-                else:
-                    result['volume_score'] = 5
-
-            score += result['volume_score']
-
-            # 2. 변동성 점수 (0-30점)
-            if 'high' in df.columns and 'low' in df.columns:
-                volatility = (df['high'] / df['low'] - 1).mean()
-                result['volatility'] = volatility
-
-                if 0.02 < volatility < 0.10:  # 2-10% (이상적)
-                    result['volatility_score'] = 30
-                elif 0.01 < volatility < 0.15:  # 1-15%
-                    result['volatility_score'] = 20
-                elif 0.005 < volatility < 0.20:  # 0.5-20%
-                    result['volatility_score'] = 10
-                else:
-                    result['volatility_score'] = 5
-
-            score += result['volatility_score']
-
-            # 3. 추세 점수 (0-40점)
-            if 'close' in df.columns:
-                close = df['close']
-
-                # 이동평균
-                if len(close) >= 20:
-                    ma_20 = close.rolling(20).mean()
-
-                    if close.iloc[-1] > ma_20.iloc[-1]:
-                        result['trend_score'] += 20
-
-                    # 상승 추세
-                    if close.iloc[-1] > close.iloc[-5]:
-                        result['trend_score'] += 10
-
-                    # 강한 상승
-                    if close.iloc[-1] > close.iloc[-10]:
-                        result['trend_score'] += 10
-
-            score += result['trend_score']
-
-            result['total_score'] = score
-            return result
-
-        except Exception as e:
-            error(f"❌ [{coin}] 점수 계산 오류: {type(e).__name__}: {str(e)}")
-            return None
 
 
 
