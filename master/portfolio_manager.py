@@ -314,12 +314,16 @@ class PortfolioManager:
 
             # 1. 전체 코인 목록
             all_coins = pyupbit.get_tickers(fiat="KRW")
+
+            # 제외 코인 필터링
+            all_coins = [c for c in all_coins if c not in self.excluded_coins]
+
             info(f"\n🔍 전체 시장 스캔 시작...")
             info(f"📊 스캔 대상: {len(all_coins)}개 코인")
 
             valid_coins = []
             debug_count = 0
-            max_debug = 10  # 상위 10개만 상세 로그
+            max_debug = 10
 
             failed_reasons = {
                 'data_load_failed': 0,
@@ -331,13 +335,12 @@ class PortfolioManager:
             # 2. 각 코인 분석
             for i, coin in enumerate(all_coins):
                 try:
-                    # 데이터 로드
                     df = pyupbit.get_ohlcv(coin, interval="day", count=30)
 
                     if df is None or len(df) == 0:
                         failed_reasons['data_load_failed'] += 1
                         if debug_count < max_debug:
-                            warning(f"❌ [{coin}] 데이터 로드 실패 (None)")
+                            warning(f"❌ [{coin}] 데이터 로드 실패")
                             debug_count += 1
                         continue
 
@@ -348,7 +351,6 @@ class PortfolioManager:
                             debug_count += 1
                         continue
 
-                    # 점수 계산
                     score_result = self._calculate_coin_score(coin, df, market_sentiment)
 
                     if score_result is None:
@@ -357,7 +359,6 @@ class PortfolioManager:
 
                     score = score_result['total_score']
 
-                    # 상세 로그 (처음 10개만)
                     if debug_count < max_debug:
                         info(f"\n📊 [{coin}] 분석 결과:")
                         info(f"   거래량: {score_result['volume']:,.0f}원 → {score_result['volume_score']}점")
@@ -366,7 +367,6 @@ class PortfolioManager:
                         info(f"   총점: {score:.2f}점 (기준: {self.min_score})")
                         debug_count += 1
 
-                    # 최소 점수 체크
                     if score < self.min_score:
                         failed_reasons['score_too_low'] += 1
                         if debug_count < max_debug:
@@ -384,7 +384,7 @@ class PortfolioManager:
                 except Exception as e:
                     failed_reasons['exception'] += 1
                     if debug_count < max_debug:
-                        error(f"❌ [{coin}] 예외 발생: {type(e).__name__}: {str(e)}")
+                        error(f"❌ [{coin}] 예외: {type(e).__name__}: {str(e)}")
                         debug_count += 1
                     continue
 
@@ -401,15 +401,10 @@ class PortfolioManager:
             info(f"📊 총 분석: {len(all_coins)}개")
             info("=" * 60)
 
-            # 유효 코인 없음
             if not valid_coins:
                 error("\n❌ 치명적 오류: 유효한 코인 0개")
                 error(f"   시장 감정: {market_sentiment}")
                 error(f"   최소 점수 기준: {self.min_score}")
-                error("\n💡 점검 사항:")
-                error("   1. Upbit API 정상 작동 확인")
-                error("   2. 최소 점수 기준 ({self.min_score}) 적절성")
-                error("   3. 점수 계산 로직 검토")
                 return None
 
             # 4. 점수 순 정렬
@@ -423,14 +418,41 @@ class PortfolioManager:
                      f"(거래량: {coin_info['volume_24h'] / 1e9:.1f}억, "
                      f"변동성: {coin_info['volatility'] * 100:.1f}%)")
 
-            # ... 이후 자금 배분 로직은 기존 코드 유지 ...
+            # 6. 자금 배분
+            selected_coins = valid_coins[:self.max_coins]
+            allocation_ratios = [0.40, 0.30, 0.20, 0.10, 0.00]
+
+            allocations = {}
+            info(f"\n💰 자금 배분:")
+
+            for i, coin_info in enumerate(selected_coins):
+                ratio = allocation_ratios[i] if i < len(allocation_ratios) else 0
+                budget = self.total_budget * ratio
+
+                allocations[coin_info['symbol']] = {
+                    'budget': budget,
+                    'score': coin_info['score'],
+                    'rank': i + 1
+                }
+
+                info(f"   {coin_info['symbol']}: {budget:,.0f}원 ({ratio * 100:.0f}%)")
+
+            info("=" * 60 + "\n")
+
+            # 7. 반환
+            return {
+                'allocations': allocations,
+                'surge_coins': [],
+                'total_analyzed': len(valid_coins)
+            }
 
         except Exception as e:
             error(f"\n❌ 포트폴리오 분석 치명적 오류: {str(e)}")
             import traceback
-            error("\n스택 트레이스:")
             error(traceback.format_exc())
             return None
+
+        
     def _calculate_coin_score(self, coin, df, market_sentiment):
         """코인 점수 계산 (상세 로그 포함)"""
         try:
