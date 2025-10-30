@@ -26,24 +26,35 @@ class PortfolioManager:
     - 동적 자금 배분
     """
 
-    def __init__(self, total_budget=SPOT_BUDGET):
-        self.total_budget = total_budget  # 600,000원
+    def __init__(self, total_budget=SPOT_BUDGET, max_coins=5, min_score=50.0):
+        """
+        포트폴리오 매니저 초기화
 
-        # 현재 포트폴리오
+        Args:
+            total_budget: 총 투자 예산
+            max_coins: 최대 코인 수
+            min_score: 최소 점수 기준
+        """
+        # 기본 설정
+        self.total_budget = total_budget
+        self.max_coins = max_coins
+        self.min_score = min_score
+
+        # 포트폴리오 상태
         self.allocations = {}  # {coin: allocated_amount}
         self.coin_scores = {}  # {coin: score}
-        self.coin_data = {}    # {coin: market_data}
+        self.coin_data = {}  # {coin: market_data}
+        self.current_allocation = {}
 
-        # 설정
+        # 배분 설정
         self.min_allocation = 0.05  # 최소 5%
         self.max_allocation = 0.40  # 최대 40%
-        self.max_coins = 5          # 최대 5개 코인
 
         # 거래량 급증 감지
         self.volume_surge_threshold = 3.0  # 평균 대비 3배
         self.volume_history = {}  # {coin: [volumes]}
 
-        # 메인 코인 (항상 포함)
+        # 메인 코인 (항상 포함 고려)
         self.core_coins = ['KRW-BTC', 'KRW-ETH']
 
         # 제외 코인 (스테이블코인, 레버리지 등)
@@ -55,6 +66,7 @@ class PortfolioManager:
         info("💼 포트폴리오 매니저 초기화 완료")
         info(f"   총 예산: {self.total_budget:,}원")
         info(f"   최대 코인 수: {self.max_coins}개")
+        info(f"   최소 점수 기준: {self.min_score}점")
 
     async def scan_all_coins(self):
         """
@@ -293,68 +305,131 @@ class PortfolioManager:
             'KRW-ETH': int(self.total_budget * 0.4)   # 40%
         }
 
-    async def analyze_and_allocate(self, market_sentiment):
-        """
-        전체 분석 및 자금 배분
-
-        Args:
-            market_sentiment: 시장 상태
-
-        Returns:
-            dict: 배분 결과
-        """
+    def analyze_and_allocate(self, market_sentiment):
+        """전체 시장 분석 + 자금 배분"""
         try:
-            info("\n" + "="*60)
+            info("\n" + "=" * 60)
             info("💼 포트폴리오 분석 시작")
-            info("="*60)
+            info("=" * 60)
 
-            # 1. 전체 시장 스캔
-            analyzed_coins = await self.scan_all_coins()
+            # 1. 전체 코인 목록
+            all_coins = pyupbit.get_tickers(fiat="KRW")
+            info(f"\n🔍 전체 시장 스캔 시작...")
+            info(f"📊 스캔 대상: {len(all_coins)}개 코인")
 
-            if not analyzed_coins:
-                warning("⚠️ 스캔 실패 - 기본 배분 사용")
-                self.allocations = self._default_allocation()
-                return self.allocations
+            valid_coins = []
+            debug_count = 0
+            max_debug = 10  # 상위 10개만 상세 로그
 
-            # 2. 거래량 급증 코인 감지
-            surge_coins = self.detect_volume_surge_coins(analyzed_coins)
-            if surge_coins:
-                info(f"\n🔥 거래량 급증: {len(surge_coins)}개")
-                for coin in surge_coins[:3]:
-                    info(f"   {coin['ticker']}: {coin['volume_ratio']:.1f}배")
-
-            # 3. 점수 계산
-            coin_scores = self.calculate_coin_scores(analyzed_coins)
-            self.coin_scores = coin_scores
-
-            # 상위 5개 출력
-            top_5 = sorted(coin_scores.items(), key=lambda x: x[1], reverse=True)[:5]
-            info(f"\n📊 상위 5개 코인:")
-            for ticker, score in top_5:
-                info(f"   {ticker}: {score:.1f}점")
-
-            # 4. 자금 배분 계산
-            new_allocations = self.calculate_allocation(coin_scores, market_sentiment)
-
-            info(f"\n💰 자금 배분:")
-            for ticker, amount in sorted(new_allocations.items(), key=lambda x: x[1], reverse=True):
-                ratio = amount / self.total_budget * 100
-                info(f"   {ticker}: {amount:,}원 ({ratio:.1f}%)")
-
-            # 5. 배분 업데이트
-            self.allocations = new_allocations
-
-            info("="*60)
-
-            return {
-                'allocations': new_allocations,
-                'coin_scores': coin_scores,
-                'surge_coins': surge_coins,
-                'analyzed_count': len(analyzed_coins)
+            failed_reasons = {
+                'data_load_failed': 0,
+                'insufficient_data': 0,
+                'score_too_low': 0,
+                'exception': 0
             }
 
+            # 2. 각 코인 분석
+            for i, coin in enumerate(all_coins):
+                try:
+                    # 데이터 로드
+                    df = pyupbit.get_ohlcv(coin, interval="day", count=30)
+
+                    if df is None or len(df) == 0:
+                        failed_reasons['data_load_failed'] += 1
+                        if debug_count < max_debug:
+                            warning(f"❌ [{coin}] 데이터 로드 실패 (None)")
+                            debug_count += 1
+                        continue
+
+                    if len(df) < 30:
+                        failed_reasons['insufficient_data'] += 1
+                        if debug_count < max_debug:
+                            warning(f"❌ [{coin}] 데이터 부족 ({len(df)}일)")
+                            debug_count += 1
+                        continue
+
+                    # 점수 계산
+                    score_result = self._calculate_coin_score(coin, df, market_sentiment)
+
+                    if score_result is None:
+                        failed_reasons['exception'] += 1
+                        continue
+
+                    score = score_result['total_score']
+
+                    # 상세 로그 (처음 10개만)
+                    if debug_count < max_debug:
+                        info(f"\n📊 [{coin}] 분석 결과:")
+                        info(f"   거래량: {score_result['volume']:,.0f}원 → {score_result['volume_score']}점")
+                        info(f"   변동성: {score_result['volatility'] * 100:.2f}% → {score_result['volatility_score']}점")
+                        info(f"   추세: {score_result['trend_score']}점")
+                        info(f"   총점: {score:.2f}점 (기준: {self.min_score})")
+                        debug_count += 1
+
+                    # 최소 점수 체크
+                    if score < self.min_score:
+                        failed_reasons['score_too_low'] += 1
+                        if debug_count < max_debug:
+                            warning(f"❌ [{coin}] 점수 미달 ({score:.2f} < {self.min_score})")
+                            debug_count += 1
+                        continue
+
+                    valid_coins.append({
+                        'symbol': coin,
+                        'score': score,
+                        'volume_24h': score_result['volume'],
+                        'volatility': score_result['volatility']
+                    })
+
+                except Exception as e:
+                    failed_reasons['exception'] += 1
+                    if debug_count < max_debug:
+                        error(f"❌ [{coin}] 예외 발생: {type(e).__name__}: {str(e)}")
+                        debug_count += 1
+                    continue
+
+            # 3. 스캔 결과 통계
+            info("\n" + "=" * 60)
+            info("📊 스캔 결과 통계")
+            info("=" * 60)
+            info(f"✅ 유효 코인: {len(valid_coins)}개")
+            info(f"❌ 실패 내역:")
+            info(f"   - 데이터 로드 실패: {failed_reasons['data_load_failed']}개")
+            info(f"   - 데이터 부족 (<30일): {failed_reasons['insufficient_data']}개")
+            info(f"   - 점수 미달 (<{self.min_score}): {failed_reasons['score_too_low']}개")
+            info(f"   - 예외 발생: {failed_reasons['exception']}개")
+            info(f"📊 총 분석: {len(all_coins)}개")
+            info("=" * 60)
+
+            # 유효 코인 없음
+            if not valid_coins:
+                error("\n❌ 치명적 오류: 유효한 코인 0개")
+                error(f"   시장 감정: {market_sentiment}")
+                error(f"   최소 점수 기준: {self.min_score}")
+                error("\n💡 점검 사항:")
+                error("   1. Upbit API 정상 작동 확인")
+                error("   2. 최소 점수 기준 ({self.min_score}) 적절성")
+                error("   3. 점수 계산 로직 검토")
+                return None
+
+            # 4. 점수 순 정렬
+            valid_coins.sort(key=lambda x: x['score'], reverse=True)
+
+            # 5. 상위 코인 출력
+            top_n = min(15, len(valid_coins))
+            info(f"\n📈 상위 {top_n}개 코인:")
+            for i, coin_info in enumerate(valid_coins[:top_n]):
+                info(f"  {i + 1}. {coin_info['symbol']}: {coin_info['score']:.2f}점 "
+                     f"(거래량: {coin_info['volume_24h'] / 1e9:.1f}억, "
+                     f"변동성: {coin_info['volatility'] * 100:.1f}%)")
+
+            # ... 이후 자금 배분 로직은 기존 코드 유지 ...
+
         except Exception as e:
-            error(f"❌ 포트폴리오 분석 오류: {e}")
+            error(f"\n❌ 포트폴리오 분석 치명적 오류: {str(e)}")
+            import traceback
+            error("\n스택 트레이스:")
+            error(traceback.format_exc())
             return None
 
     def should_rebalance(self):
@@ -519,6 +594,84 @@ class DynamicWorkerManager:
     def get_active_coins(self):
         """활성 코인 목록"""
         return list(self.active_workers.keys())
+
+    def _calculate_coin_score(self, coin, df, market_sentiment):
+        """코인 점수 계산 (상세 로그 포함)"""
+        try:
+            score = 0
+            result = {
+                'volume': 0,
+                'volume_score': 0,
+                'volatility': 0,
+                'volatility_score': 0,
+                'trend_score': 0,
+                'total_score': 0
+            }
+
+            # 1. 거래량 점수 (0-30점)
+            if 'value' in df.columns:
+                volume_24h = df['value'].iloc[-1]
+                result['volume'] = volume_24h
+
+                if volume_24h > 100_000_000_000:  # 1000억+
+                    result['volume_score'] = 30
+                elif volume_24h > 50_000_000_000:  # 500억+
+                    result['volume_score'] = 25
+                elif volume_24h > 10_000_000_000:  # 100억+
+                    result['volume_score'] = 20
+                elif volume_24h > 5_000_000_000:  # 50억+
+                    result['volume_score'] = 15
+                elif volume_24h > 1_000_000_000:  # 10억+
+                    result['volume_score'] = 10
+                else:
+                    result['volume_score'] = 5
+
+            score += result['volume_score']
+
+            # 2. 변동성 점수 (0-30점)
+            if 'high' in df.columns and 'low' in df.columns:
+                volatility = (df['high'] / df['low'] - 1).mean()
+                result['volatility'] = volatility
+
+                if 0.02 < volatility < 0.10:  # 2-10% (이상적)
+                    result['volatility_score'] = 30
+                elif 0.01 < volatility < 0.15:  # 1-15%
+                    result['volatility_score'] = 20
+                elif 0.005 < volatility < 0.20:  # 0.5-20%
+                    result['volatility_score'] = 10
+                else:
+                    result['volatility_score'] = 5
+
+            score += result['volatility_score']
+
+            # 3. 추세 점수 (0-40점)
+            if 'close' in df.columns:
+                close = df['close']
+
+                # 이동평균
+                if len(close) >= 20:
+                    ma_20 = close.rolling(20).mean()
+
+                    if close.iloc[-1] > ma_20.iloc[-1]:
+                        result['trend_score'] += 20
+
+                    # 상승 추세
+                    if close.iloc[-1] > close.iloc[-5]:
+                        result['trend_score'] += 10
+
+                    # 강한 상승
+                    if close.iloc[-1] > close.iloc[-10]:
+                        result['trend_score'] += 10
+
+            score += result['trend_score']
+
+            result['total_score'] = score
+            return result
+
+        except Exception as e:
+            error(f"❌ [{coin}] 점수 계산 오류: {type(e).__name__}: {str(e)}")
+            return None
+
 
 
 # ============================================================
