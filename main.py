@@ -63,12 +63,18 @@ class CoinMoneyBot:
     """CoinMoney 자동매매 봇 v3.3 (동적 포트폴리오)"""
 
     def __init__(self):
+        """봇 초기화"""
         info("🚀 CoinMoney Bot v3.3 시작!")
         info("=" * 60)
         info(f"📊 컨트롤러: {CONTROLLER_VERSION}")
         info(f"💼 포트폴리오 관리: ✅")
         info(f"🔥 거래량 기반 발굴: ✅")
         info(f"⚙️ 동적 워커: ✅")
+        info("=" * 60)
+
+        # ============================================================
+        # 1. API 인증
+        # ============================================================
 
         # Upbit 인증
         try:
@@ -92,27 +98,36 @@ class CoinMoneyBot:
             except Exception as e:
                 error(f"❌ 바이낸스 인증 실패: {e}")
 
-        # 상태 복구
+        # ============================================================
+        # 2. 상태 관리
+        # ============================================================
+
         try:
             state_manager.load_state()
             info("✅ 이전 상태 복구 완료")
         except:
             info("💾 새로운 상태 시작")
 
-        # 🔥 포트폴리오 매니저
-        self.portfolio_manager = PortfolioManager(total_budget=SPOT_BUDGET)
+        # ============================================================
+        # 3. 포트폴리오 & 워커 시스템
+        # ============================================================
+
+        # 포트폴리오 매니저
+        self.portfolio_manager = PortfolioManager(
+            total_budget=SPOT_BUDGET,
+            max_coins=5,
+            min_score=50.0
+        )
+
+        # 동적 워커 매니저
         self.dynamic_workers = DynamicWorkerManager(self)
 
-        # 🔥 동적 워커 매니저
-        self.worker_manager = DynamicWorkerManager(self)
+        info("✅ 포트폴리오 시스템 초기화 완료")
 
-        # 통계
-        self.spot_loop_counts = {}
-        self.futures_loop_counts = {}
-        self.last_news_check = None
-        self.last_portfolio_update = None
+        # ============================================================
+        # 4. 시장 감정 상태
+        # ============================================================
 
-        # 시장 감정 상태
         self.market_sentiment = {
             'status': 'UNKNOWN',
             'score': 0.0,
@@ -121,6 +136,33 @@ class CoinMoneyBot:
             'last_update': None
         }
 
+        # ============================================================
+        # 5. 주기 설정 (초 단위)
+        # ============================================================
+
+        self.spot_check_interval = SPOT_CHECK_INTERVAL  # 워커 체크 주기 (보통 30초)
+        self.portfolio_interval = 1800  # 포트폴리오 재분석 (30분)
+        self.market_sentiment_interval = 300  # 시장 감정 업데이트 (5분)
+
+        # ============================================================
+        # 6. 통계 & 추적
+        # ============================================================
+
+        self.spot_loop_counts = {}  # 코인별 분석 횟수
+        self.futures_loop_counts = {}  # 선물 분석 횟수
+        self.last_news_check = None  # 마지막 뉴스 체크 시간
+        self.last_portfolio_update = None  # 마지막 포트폴리오 업데이트
+
+        # ============================================================
+        # 완료
+        # ============================================================
+
+        info("=" * 60)
+        info("✅ CoinMoney Bot 초기화 완료!")
+        info(f"   💰 포트폴리오 예산: {SPOT_BUDGET:,}원")
+        info(f"   ⏰ 포트폴리오 주기: {self.portfolio_interval // 60}분")
+        info(f"   📊 워커 체크 주기: {self.spot_check_interval}초")
+        info(f"   🌍 시장 감정 주기: {self.market_sentiment_interval // 60}분")
         info("=" * 60)
 
     def check_connection(self):
