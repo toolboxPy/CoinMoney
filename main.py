@@ -101,6 +101,7 @@ class CoinMoneyBot:
 
         # 🔥 포트폴리오 매니저
         self.portfolio_manager = PortfolioManager(total_budget=SPOT_BUDGET)
+        self.dynamic_workers = DynamicWorkerManager(self)
 
         # 🔥 동적 워커 매니저
         self.worker_manager = DynamicWorkerManager(self)
