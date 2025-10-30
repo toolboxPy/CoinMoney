@@ -12,7 +12,6 @@
 
 try:
     from strategies.multi_indicator import multi_indicator_strategy
-
     MULTI_INDICATOR_AVAILABLE = True
 except ImportError:
     MULTI_INDICATOR_AVAILABLE = False
@@ -20,7 +19,6 @@ except ImportError:
 
 try:
     from strategies.dca import dca_strategy
-
     DCA_AVAILABLE = True
 except ImportError:
     DCA_AVAILABLE = False
@@ -28,7 +26,6 @@ except ImportError:
 
 try:
     from strategies.grid import grid_strategy
-
     GRID_AVAILABLE = True
 except ImportError:
     GRID_AVAILABLE = False
@@ -36,7 +33,6 @@ except ImportError:
 
 try:
     from strategies.breakout import breakout_strategy
-
     BREAKOUT_AVAILABLE = True
 except ImportError:
     BREAKOUT_AVAILABLE = False
@@ -44,7 +40,6 @@ except ImportError:
 
 try:
     from strategies.scalping import scalping_strategy
-
     SCALPING_AVAILABLE = True
 except ImportError:
     SCALPING_AVAILABLE = False
@@ -52,11 +47,11 @@ except ImportError:
 
 try:
     from strategies.trailing import trailing_strategy
-
     TRAILING_AVAILABLE = True
 except ImportError:
     TRAILING_AVAILABLE = False
     trailing_strategy = None
+
 
 # ============================================================
 # 선물 전략 임포트
@@ -64,7 +59,6 @@ except ImportError:
 
 try:
     from strategies.long_short import long_short_strategy
-
     LONG_SHORT_AVAILABLE = True
 except ImportError:
     LONG_SHORT_AVAILABLE = False
@@ -72,7 +66,6 @@ except ImportError:
 
 try:
     from strategies.futures_grid import futures_grid_strategy
-
     FUTURES_GRID_AVAILABLE = True
 except ImportError:
     FUTURES_GRID_AVAILABLE = False
@@ -80,11 +73,11 @@ except ImportError:
 
 try:
     from strategies.funding_arbitrage import funding_arbitrage_strategy
-
     FUNDING_ARBITRAGE_AVAILABLE = True
 except ImportError:
     FUNDING_ARBITRAGE_AVAILABLE = False
     funding_arbitrage_strategy = None
+
 
 # ============================================================
 # 🔥 현물 전략 등록부
@@ -109,6 +102,7 @@ if SCALPING_AVAILABLE:
 
 if TRAILING_AVAILABLE:
     strategy_registry['trailing'] = trailing_strategy
+
 
 # ============================================================
 # 🔥 선물 전략 등록부
@@ -220,6 +214,7 @@ ENABLED_STRATEGIES = {
     'futures': ['long_short']
 }
 """
+
 
 # ============================================================
 # 모듈 초기화

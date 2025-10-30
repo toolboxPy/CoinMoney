@@ -101,6 +101,22 @@ class CoinMoneyBot:
         self.futures_loop_counts = {}
         self.last_news_check = None
 
+        # 🔥 시장 감정 상태 (전체 시장 흐름)
+        self.market_sentiment = {
+            'status': 'UNKNOWN',        # BULL_RUN, BULLISH, NEUTRAL, BEARISH, CRASH
+            'score': 0.0,               # -100 ~ +100
+            'btc_trend': 'NEUTRAL',     # BTC 추세
+            'total_market_cap': 0,      # 전체 시가총액
+            'fear_greed_index': 50,     # 공포/탐욕 지수
+            'major_coins_avg': 0.0,     # 주요 코인 평균 변화율
+            'trading_allowed': True,    # 거래 허용 여부
+            'last_update': None
+        }
+
+        # 🔥 동적 워커 관리
+        self.active_workers = {}  # {coin: task}
+        self.worker_lock = asyncio.Lock()
+
         info("=" * 60)
 
     def check_connection(self):
@@ -123,6 +139,175 @@ class CoinMoneyBot:
         except Exception as e:
             error(f"❌ 연결 실패: {e}")
             return False
+
+    # ========================================
+    # 🔥 시장 감정 워커 (Market Sentiment)
+    # ========================================
+
+    async def analyze_market_sentiment(self):
+        """
+        전체 시장 감정 분석
+
+        Returns:
+            dict: 시장 상태
+        """
+        try:
+            # 주요 코인들 데이터 수집
+            major_coins = ['KRW-BTC', 'KRW-ETH', 'KRW-XRP', 'KRW-BNB']
+            changes = []
+
+            for coin in major_coins:
+                try:
+                    # 1시간 전 대비 변화율
+                    df = await asyncio.to_thread(
+                        pyupbit.get_ohlcv,
+                        coin,
+                        interval='minute60',
+                        count=2
+                    )
+
+                    if df is not None and len(df) >= 2:
+                        change = (df['close'].iloc[-1] - df['close'].iloc[-2]) / df['close'].iloc[-2]
+                        changes.append(change * 100)
+                except:
+                    continue
+
+            if not changes:
+                return None
+
+            # 평균 변화율
+            avg_change = sum(changes) / len(changes)
+
+            # 시장 상태 판단
+            if avg_change > 5:
+                status = 'BULL_RUN'      # 강한 상승장
+                trading_allowed = True
+            elif avg_change > 2:
+                status = 'BULLISH'       # 상승장
+                trading_allowed = True
+            elif avg_change > -2:
+                status = 'NEUTRAL'       # 중립
+                trading_allowed = True
+            elif avg_change > -5:
+                status = 'BEARISH'       # 하락장
+                trading_allowed = False  # 거래 중단!
+            else:
+                status = 'CRASH'         # 폭락
+                trading_allowed = False  # 거래 중단!
+
+            # BTC 트렌드 (가장 중요)
+            btc_change = changes[0] if len(changes) > 0 else 0
+            if btc_change > 3:
+                btc_trend = 'STRONG_UP'
+            elif btc_change > 1:
+                btc_trend = 'UP'
+            elif btc_change > -1:
+                btc_trend = 'NEUTRAL'
+            elif btc_change > -3:
+                btc_trend = 'DOWN'
+            else:
+                btc_trend = 'STRONG_DOWN'
+
+            return {
+                'status': status,
+                'score': avg_change,
+                'btc_trend': btc_trend,
+                'major_coins_avg': avg_change,
+                'trading_allowed': trading_allowed,
+                'last_update': datetime.now()
+            }
+
+        except Exception as e:
+            error(f"❌ 시장 감정 분석 오류: {e}")
+            return None
+
+    async def market_sentiment_worker(self):
+        """
+        시장 감정 감시 워커 (5분마다)
+
+        전체 시장의 흐름을 파악하여 개별 코인 워커들에게 신호 제공
+        """
+        info("🌍 시장 감정 워커 시작")
+
+        while True:
+            try:
+                info("\n" + "="*60)
+                info("🌍 전체 시장 분석 중...")
+                info("="*60)
+
+                # 시장 분석
+                sentiment = await self.analyze_market_sentiment()
+
+                if sentiment:
+                    # 상태 업데이트
+                    self.market_sentiment.update(sentiment)
+
+                    # 로그
+                    status_emoji = {
+                        'BULL_RUN': '🚀',
+                        'BULLISH': '📈',
+                        'NEUTRAL': '➡️',
+                        'BEARISH': '📉',
+                        'CRASH': '💥'
+                    }
+
+                    emoji = status_emoji.get(sentiment['status'], '❓')
+                    info(f"{emoji} 시장 상태: {sentiment['status']}")
+                    info(f"📊 평균 변화: {sentiment['score']:+.2f}%")
+                    info(f"₿ BTC 추세: {sentiment['btc_trend']}")
+                    info(f"🎯 거래 허용: {'✅' if sentiment['trading_allowed'] else '❌'}")
+
+                    # 🔥 긴급 상황 처리
+                    if sentiment['status'] in ['CRASH', 'BEARISH']:
+                        warning(f"⚠️ 시장 {sentiment['status']}! 모든 거래 중단!")
+
+                        # 포지션 있으면 청산 신호
+                        state = state_manager.state['spot']
+                        if state['in_position']:
+                            warning("🚨 긴급 청산 필요!")
+
+                    # 🔥 동적 코인 추가/제거 판단
+                    await self._adjust_coin_workers(sentiment)
+
+                info("="*60)
+
+                # 5분 대기
+                await asyncio.sleep(300)
+
+            except asyncio.CancelledError:
+                info("🛑 시장 감정 워커 종료")
+                break
+
+            except Exception as e:
+                error(f"⚠️ 시장 감정 워커 오류: {e}")
+                await asyncio.sleep(60)
+
+    async def _adjust_coin_workers(self, sentiment):
+        """
+        시장 상황에 따라 코인 워커 동적 조정
+
+        Args:
+            sentiment: 시장 감정
+        """
+        async with self.worker_lock:
+            current_coins = set(TRADING_COINS['spot'])
+
+            # BULL_RUN: 알트코인 추가
+            if sentiment['status'] == 'BULL_RUN':
+                potential_coins = ['KRW-SOL', 'KRW-AVAX', 'KRW-DOT']
+                for coin in potential_coins:
+                    if coin not in self.active_workers and coin not in current_coins:
+                        info(f"🚀 [{coin}] 상승장 → 워커 추가!")
+                        # TODO: 동적 워커 추가 구현
+
+            # CRASH/BEARISH: 위험 코인 제거
+            elif sentiment['status'] in ['CRASH', 'BEARISH']:
+                # 알트코인 워커 중단
+                risky_coins = ['KRW-XRP', 'KRW-ADA', 'KRW-DOGE']
+                for coin in risky_coins:
+                    if coin in self.active_workers:
+                        warning(f"📉 [{coin}] 하락장 → 워커 중단!")
+                        # TODO: 워커 중단 구현
 
     # ========================================
     # 현물 거래 관련 메서드
@@ -308,8 +493,27 @@ class CoinMoneyBot:
                 loop_count += 1
                 self.spot_loop_counts[coin] = loop_count
 
+                # 🔥 시장 감정 체크 (최우선!)
+                if not self.market_sentiment['trading_allowed']:
+                    warning(f"⚠️ [{coin}] 시장 {self.market_sentiment['status']} → 거래 중단!")
+
+                    # 포지션 있으면 청산
+                    state = state_manager.state['spot']
+                    if state['in_position'] and state['positions'].get(coin):
+                        warning(f"🚨 [{coin}] 긴급 청산 실행!")
+                        await asyncio.to_thread(
+                            spot_trader.sell_all,
+                            coin,
+                            reason=f"시장 {self.market_sentiment['status']}"
+                        )
+
+                    # 30초 대기 후 재확인
+                    await asyncio.sleep(CHECK_INTERVALS['main_loop'])
+                    continue
+
                 info(f"\n{'='*60}")
                 info(f"🔍 [{coin}] 분석 시작 (#{loop_count})")
+                info(f"🌍 시장: {self.market_sentiment['status']} ({self.market_sentiment['score']:+.1f}%)")
                 info(f"{'='*60}")
 
                 # 1. 시장 데이터
@@ -332,8 +536,12 @@ class CoinMoneyBot:
                     pnl = position_data['pnl_ratio'] * 100
                     info(f"📈 포지션: {pnl:+.2f}%")
 
-                # 4. 🧠 마스터 분석
+                # 4. 🧠 마스터 분석 (+ 시장 감정 전달)
                 info("\n🧠 마스터 분석 중...")
+
+                # 시장 감정을 market_data에 추가
+                market_data['market_sentiment'] = self.market_sentiment
+
                 analysis_result = await asyncio.to_thread(
                     master_controller.analyze_and_adjust,
                     market_data,
@@ -612,6 +820,20 @@ class CoinMoneyBot:
         info("📊 봇 통계")
         info("=" * 60)
 
+        # 시장 감정
+        status_emoji = {
+            'BULL_RUN': '🚀',
+            'BULLISH': '📈',
+            'NEUTRAL': '➡️',
+            'BEARISH': '📉',
+            'CRASH': '💥',
+            'UNKNOWN': '❓'
+        }
+        emoji = status_emoji.get(self.market_sentiment['status'], '❓')
+        info(f"🌍 시장 상태: {emoji} {self.market_sentiment['status']}")
+        info(f"📊 시장 점수: {self.market_sentiment['score']:+.2f}%")
+        info(f"₿ BTC 추세: {self.market_sentiment['btc_trend']}")
+
         # 워커 상태
         for coin, count in self.spot_loop_counts.items():
             info(f"🟢 [{coin}] 현물 루프: {count}회")
@@ -645,11 +867,17 @@ class CoinMoneyBot:
         info("🎯 자동매매 시작! (비동기 모드)")
         info(f"📊 현물 체크 주기: {CHECK_INTERVALS['main_loop']}초")
         info(f"📊 선물 체크 주기: {CHECK_INTERVALS['futures']}초")
+        info(f"🌍 시장 감정 체크 주기: 300초 (5분)")
         info(f"🪙 현물 코인: {', '.join(TRADING_COINS['spot'])}")
         info(f"🪙 선물 심볼: {', '.join(TRADING_COINS['futures'])}")
         info("=" * 60)
 
         tasks = []
+
+        # 🌍 시장 감정 워커 (최우선!)
+        market_task = asyncio.create_task(self.market_sentiment_worker())
+        tasks.append(market_task)
+        info("🌍 시장 감정 워커 등록 완료")
 
         # 🟢 현물 워커들 (각 코인마다 독립 실행!)
         for coin in TRADING_COINS['spot']:
