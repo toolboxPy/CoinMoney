@@ -1,7 +1,7 @@
 """
 현물 트레이더 (업비트)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-[v1.3 - 체결 감지 완벽 + 포트폴리오]
+[v1.3 - 체결 감지 완벽 + 포트폴리오 + 문자열 수정]
 - trades 배열로 체결 여부 정확히 판단
 - state='wait'여도 trades 있으면 체결 인정
 - 부분 체결 처리 추가
@@ -9,6 +9,7 @@
 - 대기 시간 10초로 연장
 - 최소 금액 자동 조정 (5,100원)
 - 포트폴리오 조회/출력 기능
+- trades 문자열 → float 변환 추가
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 import sys
@@ -359,7 +360,8 @@ class SpotTrader:
                     info(f"")
                     info(f"🔍 체결 상세 ({len(filled['trades'])}건):")
                     for idx, trade in enumerate(filled['trades'][:3], 1):  # 최대 3건만
-                        info(f"  #{idx} {trade['price']:,.0f}원 x {trade['volume']:.8f} = {trade['funds']:,.2f}원")
+                        # 🔥 float() 변환 추가!
+                        info(f"  #{idx} {float(trade['price']):,.0f}원 x {float(trade['volume']):.8f} = {float(trade['funds']):,.2f}원")
                     if len(filled['trades']) > 3:
                         info(f"  ... 외 {len(filled['trades']) - 3}건")
 
@@ -539,7 +541,8 @@ class SpotTrader:
                     info(f"")
                     info(f"🔍 체결 상세 ({len(filled['trades'])}건):")
                     for idx, trade in enumerate(filled['trades'][:3], 1):
-                        info(f"  #{idx} {trade['price']:,.0f}원 x {trade['volume']:.8f} = {trade['funds']:,.2f}원")
+                        # 🔥 float() 변환 추가!
+                        info(f"  #{idx} {float(trade['price']):,.0f}원 x {float(trade['volume']):.8f} = {float(trade['funds']):,.2f}원")
                     if len(filled['trades']) > 3:
                         info(f"  ... 외 {len(filled['trades']) - 3}건")
 
@@ -893,7 +896,7 @@ spot_trader = SpotTrader()
 
 # 사용 예시
 if __name__ == "__main__":
-    print("🧪 Spot Trader v1.3 테스트 (체결 감지 완벽 + 포트폴리오)\n")
+    print("🧪 Spot Trader v1.3 테스트 (완전 최종)\n")
 
     # 잔고 조회
     print("💰 잔고 조회:")

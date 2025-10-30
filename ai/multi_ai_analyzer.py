@@ -176,6 +176,65 @@ class MultiAIAnalyzer:
 
         return final_decision
 
+    # 🔥 동기 호출 별칭 (컨트롤러 호환성)
+    def analyze_sync(self, coin, df, news_list=None):
+        """
+        동기 분석 (컨트롤러 호환)
+
+        Args:
+            coin: 코인 티커 (예: "KRW-BTC")
+            df: OHLCV DataFrame
+            news_list: 뉴스 리스트 (선택)
+
+        Returns:
+            dict: 분석 결과
+        """
+        try:
+            # DataFrame에서 시장 데이터 추출
+            if df is None or len(df) == 0:
+                warning("⚠️ DataFrame 없음")
+                return None
+
+            # 최근 데이터
+            recent = df.tail(5)
+            current_price = float(df['close'].iloc[-1])
+            prev_price = float(df['close'].iloc[-2]) if len(df) >= 2 else current_price
+
+            # 가격 변화
+            price_change_24h = (current_price - prev_price) / prev_price if prev_price > 0 else 0
+
+            # 거래량 변화
+            current_volume = float(df['volume'].iloc[-1])
+            prev_volume = float(df['volume'].iloc[-2]) if len(df) >= 2 else current_volume
+            volume_change = current_volume / prev_volume if prev_volume > 0 else 1.0
+
+            # RSI (있으면)
+            rsi = 50  # 기본값
+            if 'rsi' in df.columns:
+                rsi = float(df['rsi'].iloc[-1])
+
+            # 시장 데이터 구성
+            market_data = {
+                'coin': coin.replace('KRW-', ''),
+                'price': current_price,
+                'price_change_24h': price_change_24h,
+                'volume_change': volume_change,
+                'rsi': rsi,
+                'recent_prices': df['close'].tail(5).tolist()
+            }
+
+            # 뉴스 포함 여부
+            include_news = news_list is not None and len(news_list) > 0
+
+            # 기존 analyze_market_regime 호출
+            return self.analyze_market_regime(market_data, include_news=include_news)
+
+        except Exception as e:
+            error(f"❌ AI 동기 분석 오류: {e}")
+            import traceback
+            error(traceback.format_exc())
+            return None
+
     def _prepare_market_prompt(self, data, news_list=None):
         """시장 데이터 + 뉴스를 프롬프트로 변환"""
 
