@@ -1,0 +1,226 @@
+# ============================================================
+# CoinMoney Bot .gitignore
+# ============================================================
+
+# ========================================
+# 🔐 환경변수 (API 키 등 중요 정보!)
+# ========================================
+.env
+.env.local
+.env.*.local
+*.env
+
+# ========================================
+# 🐍 Python
+# ========================================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# ========================================
+# 🌐 가상환경
+# ========================================
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ========================================
+# 📊 데이터 & 로그
+# ========================================
+# 데이터 파일
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# 로그 파일
+logs/
+*.log
+bot.log
+trade.log
+
+# 백업 파일
+backups/
+*.bak
+*.backup
+
+# CSV/Excel
+*.csv
+*.xlsx
+*.xls
+
+# 상태 파일
+state.json
+*.state
+
+# ========================================
+# 🤖 AI & 프로토콜
+# ========================================
+# AI 프로토콜 데이터
+dynamic_protocol.json
+protocol_backups/
+weekly_stats/
+
+# ========================================
+# 💻 IDE & 에디터
+# ========================================
+# VSCode
+.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# ========================================
+# 🖥️ 운영체제
+# ========================================
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# ========================================
+# 📦 패키지 관리자
+# ========================================
+# pip
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Poetry
+poetry.lock
+
+# ========================================
+# 🔒 보안 & 인증
+# ========================================
+# API 키 & 비밀번호
+*.key
+*.pem
+*.cert
+credentials.json
+secrets.json
+
+# SSH
+id_rsa
+id_rsa.pub
+
+# ========================================
+# 🧪 테스트 & 임시 파일
+# ========================================
+# 테스트
+test_output/
+*.test
+
+# 임시 파일
+tmp/
+temp/
+*.tmp
+*.temp
+
+# ========================================
+# 📈 프로젝트 특화
+# ========================================
+# 거래 데이터
+trades/
+positions/
+*.trade
+
+# 성능 데이터
+performance/
+*.perf
+
+# 스크린샷
+screenshots/
+*.png
+*.jpg
+*.jpeg
+
+# 설정 백업
+config_backup/
+*.old
+
+# ========================================
+# 🌐 기타
+# ========================================
+# 압축 파일
+*.zip
+*.tar.gz
+*.rar
+
+# 문서 (선택적)
+# *.pdf
+# *.docx
