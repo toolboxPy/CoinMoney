@@ -353,10 +353,10 @@ class PortfolioManager:
     async def _call_ai(self, prompt):
         """AI 호출"""
         try:
-            from ai.multi_ai_analyzer import multi_ai_analyzer
+            from ai.multi_ai_analyzer import multi_ai
 
             result = await asyncio.to_thread(
-                multi_ai_analyzer.analyze_sync,
+                multi_ai.analyze_sync,
                 ticker="PORTFOLIO",
                 question=prompt
             )
