@@ -246,6 +246,20 @@ class GlobalRiskManager:
             'trades': self._check_trade_limits()
         }
 
+    def get_statistics(self):
+        """통계 정보 반환 (간단 버전)"""
+        status = self.get_status()
+
+        return {
+            'daily_pnl': status['daily_loss']['percent'],
+            'consecutive_losses': status['consecutive_losses']['count'],
+            'max_drawdown': status['drawdown']['percent'],
+            'spot_positions': status['positions']['spot_count'],
+            'futures_positions': status['positions']['futures_count'],
+            'spot_trades': status['trades']['spot_count'],
+            'futures_trades': status['trades']['futures_count']
+        }
+
 
 # 전역 인스턴스
 global_risk = GlobalRiskManager()
