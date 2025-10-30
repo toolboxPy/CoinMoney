@@ -305,15 +305,18 @@ class PortfolioManager:
             'KRW-ETH': int(self.total_budget * 0.4)   # 40%
         }
 
-    def analyze_and_allocate(self, market_sentiment):
+    async def analyze_and_allocate(self, market_sentiment):  # ← async 추가!
         """전체 시장 분석 + 자금 배분"""
         try:
             info("\n" + "=" * 60)
             info("💼 포트폴리오 분석 시작")
             info("=" * 60)
 
-            # 1. 전체 코인 목록
-            all_coins = pyupbit.get_tickers(fiat="KRW")
+            # 1. 전체 코인 목록 (blocking → async)
+            all_coins = await asyncio.to_thread(
+                pyupbit.get_tickers,
+                fiat="KRW"
+            )
 
             # 제외 코인 필터링
             all_coins = [c for c in all_coins if c not in self.excluded_coins]
@@ -335,7 +338,13 @@ class PortfolioManager:
             # 2. 각 코인 분석
             for i, coin in enumerate(all_coins):
                 try:
-                    df = pyupbit.get_ohlcv(coin, interval="day", count=30)
+                    # 데이터 로드 (blocking → async)
+                    df = await asyncio.to_thread(
+                        pyupbit.get_ohlcv,
+                        coin,
+                        interval="day",
+                        count=30
+                    )
 
                     if df is None or len(df) == 0:
                         failed_reasons['data_load_failed'] += 1
@@ -351,6 +360,7 @@ class PortfolioManager:
                             debug_count += 1
                         continue
 
+                    # 점수 계산 (이건 그대로)
                     score_result = self._calculate_coin_score(coin, df, market_sentiment)
 
                     if score_result is None:
@@ -387,6 +397,9 @@ class PortfolioManager:
                         error(f"❌ [{coin}] 예외: {type(e).__name__}: {str(e)}")
                         debug_count += 1
                     continue
+
+            # 3~7. 나머지는 그대로
+            # ... (통계, 정렬, 배분 로직 동일)
 
             # 3. 스캔 결과 통계
             info("\n" + "=" * 60)
@@ -452,7 +465,7 @@ class PortfolioManager:
             error(traceback.format_exc())
             return None
 
-        
+
     def _calculate_coin_score(self, coin, df, market_sentiment):
         """코인 점수 계산 (상세 로그 포함)"""
         try:
