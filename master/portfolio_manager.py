@@ -13,6 +13,7 @@
 import pyupbit
 import asyncio
 import json
+import random
 from datetime import datetime, timedelta
 from config.master_config import SPOT_BUDGET
 from utils.logger import info, warning, error
@@ -38,14 +39,14 @@ class PortfolioManager:
     - 크레딧 관리
     """
 
-    def __init__(self, total_budget=SPOT_BUDGET, max_coins=5, min_score=50.0):
+    def __init__(self, total_budget=SPOT_BUDGET, max_coins=5, min_score=20.0):
         """
         포트폴리오 매니저 초기화
 
         Args:
             total_budget: 총 투자 예산
             max_coins: 최대 코인 수
-            min_score: 최소 점수 기준
+            min_score: 최소 점수 기준 (50 → 20으로 완화)
         """
         # 기본 설정
         self.total_budget = total_budget
@@ -123,13 +124,23 @@ class PortfolioManager:
             # 각 코인 분석
             analyzed_coins = []
             failed_count = 0
+            debug_count = 0
 
             for ticker in valid_tickers:
                 try:
                     coin_data = await self._analyze_coin(ticker)
 
-                    if coin_data and coin_data['score'] >= self.min_score:
-                        analyzed_coins.append(coin_data)
+                    if coin_data:
+                        # 점수 체크
+                        if coin_data['score'] >= self.min_score:
+                            analyzed_coins.append(coin_data)
+
+                            # 디버그 출력 (처음 5개만)
+                            if debug_count < 5:
+                                info(f"✅ [{ticker}] 통과! 점수: {coin_data['score']:.1f}")
+                                debug_count += 1
+                        else:
+                            failed_count += 1
                     else:
                         failed_count += 1
 
@@ -141,6 +152,8 @@ class PortfolioManager:
 
             if len(analyzed_coins) == 0:
                 error("❌ 유효한 코인 0개!")
+                error(f"   최소 점수 기준: {self.min_score}점")
+                error(f"   기준을 낮춰야 할 수 있습니다.")
                 return []
 
             # 점수순 정렬
@@ -198,7 +211,8 @@ class PortfolioManager:
             # 거래량 (24시간)
             volume_24h = df['value'].sum()
 
-            if volume_24h < 10_000_000:  # 1000만원 미만 제외
+            # 🔥 완화: 1000만원 → 100만원
+            if volume_24h < 1_000_000:
                 return None
 
             # 거래량 비율
@@ -229,23 +243,25 @@ class PortfolioManager:
             else:
                 momentum = 'STRONG_DOWN'
 
-            # 종합 점수 (0~100)
+            # 🔥 종합 점수 (0~100) - 더 관대하게
             score = 0.0
 
-            # 1. 기술 점수 (40점)
-            score += technical_score * 8  # 5점 만점 → 40점
+            # 1. 기술 점수 (30점)
+            score += technical_score * 6  # 5점 만점 → 30점
 
-            # 2. 거래량 (30점)
+            # 2. 거래량 (40점) - 더 관대하게
             if volume_24h > 100_000_000_000:  # 1000억+
-                score += 30
+                score += 40
             elif volume_24h > 50_000_000_000:  # 500억+
-                score += 25
+                score += 35
             elif volume_24h > 10_000_000_000:  # 100억+
-                score += 20
+                score += 30
             elif volume_24h > 1_000_000_000:  # 10억+
-                score += 15
+                score += 25
+            elif volume_24h > 100_000_000:  # 1억+
+                score += 20
             else:
-                score += 10
+                score += 15  # 최소 점수 보장
 
             # 3. 모멘텀 (20점)
             if momentum == 'STRONG_UP':
@@ -258,12 +274,20 @@ class PortfolioManager:
                 score += 5
 
             # 4. 변동성 (10점)
-            if 0.02 < volatility < 0.10:  # 2~10% 이상적
+            if 0.02 < volatility < 0.10:
                 score += 10
             elif 0.01 < volatility < 0.15:
                 score += 7
             else:
                 score += 5
+
+            # 🔥 디버그 로그 (5% 확률)
+            if random.random() < 0.05:
+                info(f"\n🔍 [{ticker}] 분석:")
+                info(f"   거래량: {volume_24h/1e9:.2f}B")
+                info(f"   기술점수: {technical_score:.1f}/5")
+                info(f"   모멘텀: {momentum}")
+                info(f"   최종점수: {score:.1f}")
 
             return {
                 'ticker': ticker,
