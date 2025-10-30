@@ -5,52 +5,65 @@
 여기에 한 줄만 추가하면 자동으로 등록됩니다.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
+from utils.logger import info, warning
 
 # ============================================================
 # 현물 전략 임포트
 # ============================================================
 
 try:
-    from strategies.multi_indicator import multi_indicator_strategy
+    from strategies.multi_indicator import multi_indicator_30m as multi_indicator_strategy
     MULTI_INDICATOR_AVAILABLE = True
-except ImportError:
+    info("✅ Multi-Indicator 전략 로드 완료")
+except ImportError as e:
     MULTI_INDICATOR_AVAILABLE = False
     multi_indicator_strategy = None
+    warning(f"⚠️ Multi-Indicator 전략 로드 실패: {e}")
 
 try:
     from strategies.dca import dca_strategy
     DCA_AVAILABLE = True
-except ImportError:
+    info("✅ DCA 전략 로드 완료")
+except ImportError as e:
     DCA_AVAILABLE = False
     dca_strategy = None
+    warning(f"⚠️ DCA 전략 로드 실패: {e}")
 
 try:
     from strategies.grid import grid_strategy
     GRID_AVAILABLE = True
-except ImportError:
+    info("✅ Grid 전략 로드 완료")
+except ImportError as e:
     GRID_AVAILABLE = False
     grid_strategy = None
+    warning(f"⚠️ Grid 전략 로드 실패: {e}")
 
 try:
     from strategies.breakout import breakout_strategy
     BREAKOUT_AVAILABLE = True
-except ImportError:
+    info("✅ Breakout 전략 로드 완료")
+except ImportError as e:
     BREAKOUT_AVAILABLE = False
     breakout_strategy = None
+    warning(f"⚠️ Breakout 전략 로드 실패: {e}")
 
 try:
     from strategies.scalping import scalping_strategy
     SCALPING_AVAILABLE = True
-except ImportError:
+    info("✅ Scalping 전략 로드 완료")
+except ImportError as e:
     SCALPING_AVAILABLE = False
     scalping_strategy = None
+    warning(f"⚠️ Scalping 전략 로드 실패: {e}")
 
 try:
     from strategies.trailing import trailing_strategy
     TRAILING_AVAILABLE = True
-except ImportError:
+    info("✅ Trailing 전략 로드 완료")
+except ImportError as e:
     TRAILING_AVAILABLE = False
     trailing_strategy = None
+    warning(f"⚠️ Trailing 전략 로드 실패: {e}")
 
 
 # ============================================================
@@ -60,21 +73,25 @@ except ImportError:
 try:
     from strategies.long_short import long_short_strategy
     LONG_SHORT_AVAILABLE = True
-except ImportError:
+    info("✅ Long/Short 전략 로드 완료")
+except ImportError as e:
     LONG_SHORT_AVAILABLE = False
     long_short_strategy = None
+    # 선물 전략은 경고 안 함 (선택적)
 
 try:
     from strategies.futures_grid import futures_grid_strategy
     FUTURES_GRID_AVAILABLE = True
-except ImportError:
+    info("✅ Futures Grid 전략 로드 완료")
+except ImportError as e:
     FUTURES_GRID_AVAILABLE = False
     futures_grid_strategy = None
 
 try:
     from strategies.funding_arbitrage import funding_arbitrage_strategy
     FUNDING_ARBITRAGE_AVAILABLE = True
-except ImportError:
+    info("✅ Funding Arbitrage 전략 로드 완료")
+except ImportError as e:
     FUNDING_ARBITRAGE_AVAILABLE = False
     funding_arbitrage_strategy = None
 
@@ -142,6 +159,14 @@ def is_strategy_available(strategy_name, is_futures=False):
         return strategy_name in strategy_registry
 
 
+def get_strategy(strategy_name, is_futures=False):
+    """전략 인스턴스 가져오기"""
+    if is_futures:
+        return futures_strategy_registry.get(strategy_name)
+    else:
+        return strategy_registry.get(strategy_name)
+
+
 def print_available_strategies():
     """등록된 전략 목록 출력"""
     print("\n" + "=" * 60)
@@ -150,19 +175,45 @@ def print_available_strategies():
 
     print("\n🟢 현물 전략:")
     if strategy_registry:
-        for name in strategy_registry.keys():
-            print(f"  ✅ {name}")
+        for name, strategy in strategy_registry.items():
+            print(f"  ✅ {name:<20} → {strategy.name if hasattr(strategy, 'name') else '???'}")
     else:
         print("  ❌ 등록된 전략 없음")
 
     print("\n🔵 선물 전략:")
     if futures_strategy_registry:
-        for name in futures_strategy_registry.keys():
-            print(f"  ✅ {name}")
+        for name, strategy in futures_strategy_registry.items():
+            print(f"  ✅ {name:<20} → {strategy.name if hasattr(strategy, 'name') else '???'}")
     else:
         print("  ❌ 등록된 전략 없음")
 
+    print("\n📈 전략 통계:")
+    print(f"  현물: {len(strategy_registry)}개")
+    print(f"  선물: {len(futures_strategy_registry)}개")
+    print(f"  총합: {len(strategy_registry) + len(futures_strategy_registry)}개")
+
     print("=" * 60 + "\n")
+
+
+# ============================================================
+# 초기화 로그
+# ============================================================
+
+info("=" * 60)
+info("📊 전략 시스템 초기화 완료")
+info("=" * 60)
+info(f"✅ 현물 전략: {len(strategy_registry)}개 등록")
+for name in strategy_registry.keys():
+    info(f"   - {name}")
+
+if futures_strategy_registry:
+    info(f"✅ 선물 전략: {len(futures_strategy_registry)}개 등록")
+    for name in futures_strategy_registry.keys():
+        info(f"   - {name}")
+else:
+    info("📝 선물 전략: 등록 없음 (현물만 사용)")
+
+info("=" * 60)
 
 
 # ============================================================
@@ -179,26 +230,36 @@ def print_available_strategies():
 
 # strategies/my_strategy.py
 class MyStrategy:
-    def run(self, coin, analysis):
-        # 전략 로직
-        if 매수_조건:
-            return 'BUY'
-        elif 매도_조건:
-            return 'SELL'
-        else:
-            return 'HOLD'
+    def __init__(self, timeframe='1h'):
+        self.timeframe = timeframe
+        self.name = f"MyStrategy-{timeframe}"
+    
+    def analyze(self, coin):
+        # 분석 로직
+        return {
+            'signal': 'BUY/SELL/HOLD',
+            'score': float,
+            'confidence': float,
+            'reasons': []
+        }
+    
+    def execute(self, coin):
+        # 실행 로직
+        return result
 
 # 인스턴스 생성
-my_strategy = MyStrategy()
+my_strategy = MyStrategy('1h')
 
 3. 이 파일(__init__.py)에 임포트 추가:
 
 try:
     from strategies.my_strategy import my_strategy
     MY_STRATEGY_AVAILABLE = True
-except ImportError:
+    info("✅ My Strategy 전략 로드 완료")
+except ImportError as e:
     MY_STRATEGY_AVAILABLE = False
     my_strategy = None
+    warning(f"⚠️ My Strategy 전략 로드 실패: {e}")
 
 4. 등록부에 추가:
 
@@ -206,13 +267,6 @@ if MY_STRATEGY_AVAILABLE:
     strategy_registry['my_strategy'] = my_strategy
 
 5. 완료! main.py는 수정 불필요 ✅
-
-6. config/master_config.py에서 활성화:
-
-ENABLED_STRATEGIES = {
-    'spot': ['multi_indicator', 'my_strategy'],  # 추가!
-    'futures': ['long_short']
-}
 """
 
 
@@ -225,7 +279,24 @@ if __name__ == "__main__":
     print_available_strategies()
 
     # 테스트
-    print("테스트:")
-    print(f"  multi_indicator 사용 가능? {is_strategy_available('multi_indicator')}")
-    print(f"  dca 사용 가능? {is_strategy_available('dca')}")
-    print(f"  long_short 사용 가능? {is_strategy_available('long_short', is_futures=True)}")
+    print("\n" + "=" * 60)
+    print("🧪 전략 사용 가능 여부 테스트")
+    print("=" * 60)
+
+    test_strategies = [
+        ('multi_indicator', False),
+        ('dca', False),
+        ('grid', False),
+        ('breakout', False),
+        ('scalping', False),
+        ('trailing', False),
+        ('long_short', True)
+    ]
+
+    for strategy_name, is_futures in test_strategies:
+        available = is_strategy_available(strategy_name, is_futures)
+        strategy_type = "선물" if is_futures else "현물"
+        status = "✅ 사용 가능" if available else "❌ 사용 불가"
+        print(f"  {strategy_name:<20} ({strategy_type}): {status}")
+
+    print("=" * 60)
