@@ -120,7 +120,7 @@ class CoinMoneyBot:
         self.portfolio_manager = PortfolioManager(
             total_budget=SPOT_BUDGET,
             max_coins=5,
-            min_score=50.0
+            min_score=20.0
         )
 
         # 동적 워커 매니저
