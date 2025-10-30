@@ -86,20 +86,6 @@ class PortfolioManager:
     async def scan_all_coins(self):
         """
         전체 KRW 시장 스캔 → 상위 10개 후보 선정
-
-        Returns:
-            list: [
-                {
-                    'ticker': 'KRW-BTC',
-                    'score': 85.5,
-                    'volume_24h': 1000000000,
-                    'change_24h': 3.2,
-                    'technical_score': 3.5,
-                    'momentum': 'STRONG_UP',
-                    'volatility': 0.05
-                },
-                ...
-            ]
         """
         try:
             info("\n" + "=" * 60)
@@ -126,6 +112,13 @@ class PortfolioManager:
             failed_count = 0
             debug_count = 0
 
+            # 🔥 실패 원인 추적
+            fail_reasons = {
+                'no_data': 0,
+                'below_threshold': 0,
+                'exception': 0
+            }
+
             for ticker in valid_tickers:
                 try:
                     coin_data = await self._analyze_coin(ticker)
@@ -135,25 +128,44 @@ class PortfolioManager:
                         if coin_data['score'] >= self.min_score:
                             analyzed_coins.append(coin_data)
 
-                            # 디버그 출력 (처음 5개만)
-                            if debug_count < 5:
+                            # 디버그 출력 (처음 10개만)
+                            if debug_count < 10:
                                 info(f"✅ [{ticker}] 통과! 점수: {coin_data['score']:.1f}")
                                 debug_count += 1
                         else:
                             failed_count += 1
+                            fail_reasons['below_threshold'] += 1
+
+                            # 샘플 출력
+                            if debug_count < 10:
+                                warning(f"❌ [{ticker}] 점수 미달: {coin_data['score']:.1f} < {self.min_score}")
+                                debug_count += 1
                     else:
                         failed_count += 1
+                        fail_reasons['no_data'] += 1
 
                 except Exception as e:
                     failed_count += 1
+                    fail_reasons['exception'] += 1
+                    if debug_count < 10:
+                        error(f"❌ [{ticker}] 예외: {e}")
+                        debug_count += 1
                     continue
 
-            info(f"✅ 분석 완료: {len(analyzed_coins)}개 유효 (실패: {failed_count}개)")
+            # 🔥 상세 통계
+            info(f"\n✅ 분석 완료:")
+            info(f"   유효: {len(analyzed_coins)}개")
+            info(f"   실패: {failed_count}개")
+            info(f"      - 데이터 없음: {fail_reasons['no_data']}개")
+            info(f"      - 점수 미달: {fail_reasons['below_threshold']}개")
+            info(f"      - 예외 발생: {fail_reasons['exception']}개")
 
             if len(analyzed_coins) == 0:
-                error("❌ 유효한 코인 0개!")
+                error("\n❌ 유효한 코인 0개!")
                 error(f"   최소 점수 기준: {self.min_score}점")
-                error(f"   기준을 낮춰야 할 수 있습니다.")
+                error(f"   → 모든 코인이 데이터 없음 또는 조건 미달")
+                error(f"   → 거래량 기준: 100만원 이상")
+                error(f"   → 차트 데이터: 20개 이상")
                 return []
 
             # 점수순 정렬
@@ -179,7 +191,7 @@ class PortfolioManager:
 
     async def _analyze_coin(self, ticker):
         """
-        개별 코인 분석
+        개별 코인 분석 (디버그 버전)
 
         Args:
             ticker: 코인 티커 (예: 'KRW-BTC')
@@ -195,6 +207,8 @@ class PortfolioManager:
             )
 
             if not current_price or current_price < 100:
+                if random.random() < 0.01:  # 1% 로그
+                    warning(f"[{ticker}] 가격 없음 또는 100원 미만")
                 return None
 
             # OHLCV 데이터 (1시간봉 24개)
@@ -206,13 +220,21 @@ class PortfolioManager:
             )
 
             if df is None or len(df) < 20:
+                if random.random() < 0.01:  # 1% 로그
+                    warning(f"[{ticker}] 차트 데이터 부족 (len={len(df) if df is not None else 0})")
                 return None
 
             # 거래량 (24시간)
             volume_24h = df['value'].sum()
 
-            # 🔥 완화: 1000만원 → 100만원
+            # 🔥 디버그: 거래량 출력 (처음 10개)
+            if random.random() < 0.05:
+                info(f"[{ticker}] 거래량: {volume_24h:,.0f}원")
+
+            # 🔥 완화: 100만원으로 낮춤
             if volume_24h < 1_000_000:
+                if random.random() < 0.01:
+                    warning(f"[{ticker}] 거래량 부족: {volume_24h:,.0f}원 < 1,000,000원")
                 return None
 
             # 거래량 비율
@@ -231,6 +253,10 @@ class PortfolioManager:
             technical = technical_analyzer.analyze(df)
             technical_score = technical.get('score', 0)
 
+            # 🔥 디버그: 기술 점수 출력
+            if random.random() < 0.05:
+                info(f"[{ticker}] 기술점수: {technical_score:.1f}/5")
+
             # 모멘텀 판단
             if price_change_24h > 0.05:
                 momentum = 'STRONG_UP'
@@ -247,47 +273,56 @@ class PortfolioManager:
             score = 0.0
 
             # 1. 기술 점수 (30점)
-            score += technical_score * 6  # 5점 만점 → 30점
+            tech_points = technical_score * 6  # 5점 만점 → 30점
+            score += tech_points
 
             # 2. 거래량 (40점) - 더 관대하게
             if volume_24h > 100_000_000_000:  # 1000억+
-                score += 40
+                vol_points = 40
             elif volume_24h > 50_000_000_000:  # 500억+
-                score += 35
+                vol_points = 35
             elif volume_24h > 10_000_000_000:  # 100억+
-                score += 30
+                vol_points = 30
             elif volume_24h > 1_000_000_000:  # 10억+
-                score += 25
+                vol_points = 25
             elif volume_24h > 100_000_000:  # 1억+
-                score += 20
+                vol_points = 20
             else:
-                score += 15  # 최소 점수 보장
+                vol_points = 15  # 최소 점수 보장
+
+            score += vol_points
 
             # 3. 모멘텀 (20점)
             if momentum == 'STRONG_UP':
-                score += 20
+                mom_points = 20
             elif momentum == 'UP':
-                score += 15
+                mom_points = 15
             elif momentum == 'NEUTRAL':
-                score += 10
+                mom_points = 10
             else:
-                score += 5
+                mom_points = 5
+
+            score += mom_points
 
             # 4. 변동성 (10점)
             if 0.02 < volatility < 0.10:
-                score += 10
+                vol_points_2 = 10
             elif 0.01 < volatility < 0.15:
-                score += 7
+                vol_points_2 = 7
             else:
-                score += 5
+                vol_points_2 = 5
 
-            # 🔥 디버그 로그 (5% 확률)
-            if random.random() < 0.05:
-                info(f"\n🔍 [{ticker}] 분석:")
-                info(f"   거래량: {volume_24h/1e9:.2f}B")
-                info(f"   기술점수: {technical_score:.1f}/5")
-                info(f"   모멘텀: {momentum}")
-                info(f"   최종점수: {score:.1f}")
+            score += vol_points_2
+
+            # 🔥 디버그: 점수 상세 출력 (10% 확률)
+            if random.random() < 0.1:
+                info(f"\n🔍 [{ticker}] 상세 점수:")
+                info(f"   기술: {tech_points:.1f}점 (score={technical_score:.1f})")
+                info(f"   거래량: {vol_points}점 (vol={volume_24h / 1e9:.2f}B)")
+                info(f"   모멘텀: {mom_points}점 ({momentum})")
+                info(f"   변동성: {vol_points_2}점 ({volatility:.3f})")
+                info(f"   ━━━━━━━━━━━━━━━━━━━━━━")
+                info(f"   최종: {score:.1f}점")
 
             return {
                 'ticker': ticker,
@@ -303,6 +338,9 @@ class PortfolioManager:
             }
 
         except Exception as e:
+            # 🔥 예외도 로깅 (1% 확률)
+            if random.random() < 0.01:
+                error(f"[{ticker}] 분석 예외: {type(e).__name__}: {e}")
             return None
 
     async def ai_select_portfolio(self, top_10_candidates):
