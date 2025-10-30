@@ -4,26 +4,41 @@
 [핵심 기능]
 1. 전체 시장 스캔 (모든 KRW 코인)
 2. 거래량 급증 코인 발굴
-3. 코인별 점수 계산 (기술적 + 거래량)
-4. 동적 자금 배분 (좋은 코인에 더 많이)
-5. 포트폴리오 리밸런싱
+3. 🤖 AI 토론: 코인 선택 + 배분 비율 결정
+4. 🧬 압축 언어 (동적 진화): 토큰 절약
+5. 💳 크레딧 시스템: 무분별한 AI 호출 방지
+6. 동적 자금 배분 (좋은 코인에 더 많이)
+7. 포트폴리오 리밸런싱
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 import pyupbit
 import asyncio
+import json
 from datetime import datetime, timedelta
 from config.master_config import SPOT_BUDGET
 from utils.logger import info, warning, error
 from analysis.technical import technical_analyzer
 
+# 🔥 AI 시스템 임포트
+try:
+    from ai.credit_system import credit_system
+    from ai.multi_ai_debate_dynamic import DynamicAIDebate
+    AI_AVAILABLE = True
+    info("✅ AI 포트폴리오 시스템 활성화")
+except ImportError as e:
+    AI_AVAILABLE = False
+    credit_system = None
+    warning(f"⚠️ AI 시스템 비활성: {e}")
+
 
 class PortfolioManager:
     """
-    포트폴리오 매니저
+    AI 통합 포트폴리오 매니저
 
     - 전체 시장 분석
-    - 거래량 기반 코인 발굴
-    - 동적 자금 배분
+    - AI 토론: 코인 선택 + 배분
+    - 압축 언어 (동적 진화)
+    - 크레딧 관리
     """
 
     def __init__(self, total_budget=SPOT_BUDGET, max_coins=5, min_score=50.0):
@@ -63,20 +78,45 @@ class PortfolioManager:
             'KRW-WBTC', 'KRW-WEMIX',  # 래핑
         ]
 
+        # 🤖 AI 시스템
+        if AI_AVAILABLE:
+            self.ai_debate = DynamicAIDebate(
+                interval=timedelta(minutes=30),
+                rounds=3  # 포트폴리오 선택: 3라운드 토론
+            )
+            info("🤖 AI 토론 시스템 연결 완료 (압축 언어 활성화)")
+        else:
+            self.ai_debate = None
+
         info("💼 포트폴리오 매니저 초기화 완료")
         info(f"   총 예산: {self.total_budget:,}원")
         info(f"   최대 코인 수: {self.max_coins}개")
         info(f"   최소 점수 기준: {self.min_score}점")
+        if AI_AVAILABLE:
+            info(f"   💳 AI 크레딧: {credit_system.get_remaining()}/{credit_system.daily_limit}")
 
     async def scan_all_coins(self):
         """
-        전체 KRW 시장 스캔
+        전체 KRW 시장 스캔 → 상위 10개 후보 선정
 
         Returns:
-            list: 분석된 코인 리스트
+            list: [
+                {
+                    'ticker': 'KRW-BTC',
+                    'score': 85.5,
+                    'volume_24h': 1000000000,
+                    'change_24h': 3.2,
+                    'technical_score': 3.5,
+                    'momentum': 'STRONG_UP',
+                    'volatility': 0.05
+                },
+                ...
+            ]
         """
         try:
-            info("\n🔍 전체 시장 스캔 시작...")
+            info("\n" + "=" * 60)
+            info("🔍 전체 시장 스캔 시작")
+            info("=" * 60)
 
             # 모든 KRW 코인 가져오기
             all_tickers = await asyncio.to_thread(pyupbit.get_tickers, fiat="KRW")
@@ -95,24 +135,46 @@ class PortfolioManager:
 
             # 각 코인 분석
             analyzed_coins = []
+            failed_count = 0
 
-            for ticker in valid_tickers[:50]:  # 상위 50개만 (시간 절약)
+            for ticker in valid_tickers:
                 try:
                     coin_data = await self._analyze_coin(ticker)
 
-                    if coin_data:
+                    if coin_data and coin_data['score'] >= self.min_score:
                         analyzed_coins.append(coin_data)
+                    else:
+                        failed_count += 1
 
                 except Exception as e:
-                    # 개별 코인 오류는 무시
+                    failed_count += 1
                     continue
 
-            info(f"✅ 분석 완료: {len(analyzed_coins)}개 코인")
+            info(f"✅ 분석 완료: {len(analyzed_coins)}개 유효 (실패: {failed_count}개)")
 
-            return analyzed_coins
+            if len(analyzed_coins) == 0:
+                error("❌ 유효한 코인 0개!")
+                return []
+
+            # 점수순 정렬
+            analyzed_coins.sort(key=lambda x: x['score'], reverse=True)
+
+            # 상위 10개 선정
+            top_10 = analyzed_coins[:10]
+
+            info(f"\n📋 상위 10개 후보:")
+            for i, coin in enumerate(top_10, 1):
+                info(f"   {i}. {coin['ticker']}: {coin['score']:.1f}점 "
+                     f"(24h {coin['change_24h']:+.1f}%, {coin['momentum']})")
+
+            info("=" * 60 + "\n")
+
+            return top_10
 
         except Exception as e:
             error(f"❌ 전체 스캔 오류: {e}")
+            import traceback
+            error(traceback.format_exc())
             return []
 
     async def _analyze_coin(self, ticker):
@@ -143,10 +205,16 @@ class PortfolioManager:
                 count=24
             )
 
-            if df is None or len(df) < 10:
+            if df is None or len(df) < 20:
                 return None
 
-            # 거래량 분석
+            # 거래량 (24시간)
+            volume_24h = df['value'].sum()
+
+            if volume_24h < 10_000_000:  # 1000만원 미만 제외
+                return None
+
+            # 거래량 비율
             recent_volume = df['volume'].iloc[-1]
             avg_volume = df['volume'].iloc[-24:-1].mean()
             volume_ratio = recent_volume / avg_volume if avg_volume > 0 else 1.0
@@ -155,428 +223,357 @@ class PortfolioManager:
             price_change_1h = (df['close'].iloc[-1] - df['close'].iloc[-2]) / df['close'].iloc[-2]
             price_change_24h = (df['close'].iloc[-1] - df['close'].iloc[0]) / df['close'].iloc[0]
 
+            # 변동성
+            volatility = (df['high'] / df['low'] - 1).mean()
+
             # 기술적 분석
             technical = technical_analyzer.analyze(df)
+            technical_score = technical.get('score', 0)
+
+            # 모멘텀 판단
+            if price_change_24h > 0.05:
+                momentum = 'STRONG_UP'
+            elif price_change_24h > 0.02:
+                momentum = 'UP'
+            elif price_change_24h > -0.02:
+                momentum = 'NEUTRAL'
+            elif price_change_24h > -0.05:
+                momentum = 'DOWN'
+            else:
+                momentum = 'STRONG_DOWN'
+
+            # 종합 점수 (0~100)
+            score = 0.0
+
+            # 1. 기술 점수 (40점)
+            score += technical_score * 8  # 5점 만점 → 40점
+
+            # 2. 거래량 (30점)
+            if volume_24h > 100_000_000_000:  # 1000억+
+                score += 30
+            elif volume_24h > 50_000_000_000:  # 500억+
+                score += 25
+            elif volume_24h > 10_000_000_000:  # 100억+
+                score += 20
+            elif volume_24h > 1_000_000_000:  # 10억+
+                score += 15
+            else:
+                score += 10
+
+            # 3. 모멘텀 (20점)
+            if momentum == 'STRONG_UP':
+                score += 20
+            elif momentum == 'UP':
+                score += 15
+            elif momentum == 'NEUTRAL':
+                score += 10
+            else:
+                score += 5
+
+            # 4. 변동성 (10점)
+            if 0.02 < volatility < 0.10:  # 2~10% 이상적
+                score += 10
+            elif 0.01 < volatility < 0.15:
+                score += 7
+            else:
+                score += 5
 
             return {
                 'ticker': ticker,
+                'score': score,
                 'price': current_price,
+                'volume_24h': volume_24h,
                 'volume_ratio': volume_ratio,
-                'price_change_1h': price_change_1h,
-                'price_change_24h': price_change_24h,
-                'technical_score': technical.get('score', 0),
-                'df': df
+                'change_1h': price_change_1h * 100,
+                'change_24h': price_change_24h * 100,
+                'technical_score': technical_score,
+                'momentum': momentum,
+                'volatility': volatility
             }
 
         except Exception as e:
             return None
 
-    def calculate_coin_scores(self, analyzed_coins):
+    async def ai_select_portfolio(self, top_10_candidates):
         """
-        코인별 점수 계산
+        🤖 AI가 포트폴리오 선택 (압축 언어 + 토론)
 
         Args:
-            analyzed_coins: 분석된 코인 리스트
+            top_10_candidates: 상위 10개 후보
 
         Returns:
-            dict: {ticker: score}
+            {
+                'selected': [
+                    {
+                        'ticker': 'KRW-BTC',
+                        'allocation': 0.4,
+                        'reasoning': '...'
+                    },
+                    ...
+                ],
+                'ai_confidence': 0.85,
+                'reasoning': '전체 전략...',
+                'protocol_version': 'v1.2'
+            }
         """
-        scores = {}
-
-        for coin in analyzed_coins:
-            ticker = coin['ticker']
-
-            # 점수 계산 (0~100)
-            score = 0.0
-
-            # 1. 거래량 (40점)
-            volume_score = min(coin['volume_ratio'] * 10, 40)
-            score += volume_score
-
-            # 2. 기술적 분석 (30점)
-            tech_score = coin['technical_score'] * 6  # 5점 만점 → 30점
-            score += tech_score
-
-            # 3. 가격 모멘텀 (20점)
-            momentum_score = 0
-            if coin['price_change_1h'] > 0.02:  # 1시간 +2%
-                momentum_score += 10
-            if coin['price_change_24h'] > 0.05:  # 24시간 +5%
-                momentum_score += 10
-            score += momentum_score
-
-            # 4. 코어 코인 보너스 (10점)
-            if ticker in self.core_coins:
-                score += 10
-
-            scores[ticker] = score
-
-        return scores
-
-    def detect_volume_surge_coins(self, analyzed_coins):
-        """
-        거래량 급증 코인 감지
-
-        Args:
-            analyzed_coins: 분석된 코인 리스트
-
-        Returns:
-            list: 거래량 급증 코인
-        """
-        surge_coins = []
-
-        for coin in analyzed_coins:
-            ticker = coin['ticker']
-            volume_ratio = coin['volume_ratio']
-
-            # 거래량 급증 (3배 이상)
-            if volume_ratio >= self.volume_surge_threshold:
-                surge_coins.append({
-                    'ticker': ticker,
-                    'volume_ratio': volume_ratio,
-                    'price_change_1h': coin['price_change_1h']
-                })
-
-                info(f"🔥 [{ticker}] 거래량 급증! {volume_ratio:.1f}배")
-
-        return surge_coins
-
-    def calculate_allocation(self, coin_scores, market_sentiment):
-        """
-        동적 자금 배분 계산
-
-        Args:
-            coin_scores: 코인별 점수
-            market_sentiment: 시장 상태
-
-        Returns:
-            dict: {ticker: amount}
-        """
-        # 점수 정렬 (높은 순)
-        sorted_coins = sorted(
-            coin_scores.items(),
-            key=lambda x: x[1],
-            reverse=True
-        )
-
-        # 상위 N개 선택
-        top_coins = sorted_coins[:self.max_coins]
-
-        # 총 점수 계산
-        total_score = sum(score for _, score in top_coins)
-
-        if total_score == 0:
-            warning("⚠️ 총 점수가 0 - 기본 배분 사용")
-            return self._default_allocation()
-
-        # 점수 비율로 자금 배분
-        allocations = {}
-
-        for ticker, score in top_coins:
-            # 기본 비율
-            ratio = score / total_score
-
-            # 최소/최대 제한
-            ratio = max(ratio, self.min_allocation)
-            ratio = min(ratio, self.max_allocation)
-
-            # 코어 코인 보정
-            if ticker in self.core_coins:
-                ratio = max(ratio, 0.20)  # 최소 20%
-
-            # 금액 계산
-            amount = int(self.total_budget * ratio)
-            allocations[ticker] = amount
-
-        # 합계 조정 (정확히 total_budget)
-        total_allocated = sum(allocations.values())
-        if total_allocated != self.total_budget:
-            # 가장 큰 코인에서 차액 조정
-            largest_coin = max(allocations, key=allocations.get)
-            diff = self.total_budget - total_allocated
-            allocations[largest_coin] += diff
-
-        return allocations
-
-    def _default_allocation(self):
-        """기본 배분 (코어 코인만)"""
-        return {
-            'KRW-BTC': int(self.total_budget * 0.6),  # 60%
-            'KRW-ETH': int(self.total_budget * 0.4)   # 40%
-        }
-
-    async def analyze_and_allocate(self, market_sentiment):  # ← async 추가!
-        """전체 시장 분석 + 자금 배분"""
         try:
             info("\n" + "=" * 60)
-            info("💼 포트폴리오 분석 시작")
+            info("🤖 AI 포트폴리오 자문 시작")
             info("=" * 60)
 
-            # 1. 전체 코인 목록 (blocking → async)
-            all_coins = await asyncio.to_thread(
-                pyupbit.get_tickers,
-                fiat="KRW"
+            # 1. 크레딧 체크
+            if not credit_system.can_use('debate'):
+                warning("⚠️ AI 크레딧 부족! 기본 알고리즘 사용")
+                return self._default_ai_selection(top_10_candidates)
+
+            # 2. 프롬프트 작성 (압축 언어 사용)
+            prompt = self._build_ai_prompt(top_10_candidates)
+
+            # 3. AI 토론 실행 (압축 언어 + 진화)
+            info(f"💬 AI 토론 시작 (3 라운드, 압축 언어 활성화)")
+            info(f"💳 크레딧 소비: 3 (토론 2 + 진화 체크 1)")
+
+            credit_system.use_credit('debate', '포트폴리오 선택 토론')
+
+            debate_result = await self.ai_debate.start_debate(
+                topic=f"포트폴리오 선택 (예산: {self.total_budget:,}원)",
+                context=prompt,
+                num_rounds=3
             )
 
-            # 제외 코인 필터링
-            all_coins = [c for c in all_coins if c not in self.excluded_coins]
+            if not debate_result or not debate_result.get('consensus'):
+                warning("⚠️ AI 토론 실패")
+                return self._default_ai_selection(top_10_candidates)
 
-            info(f"\n🔍 전체 시장 스캔 시작...")
-            info(f"📊 스캔 대상: {len(all_coins)}개 코인")
+            # 4. 결과 파싱
+            ai_response = self._parse_ai_response(
+                debate_result['consensus'],
+                top_10_candidates
+            )
 
-            valid_coins = []
-            debug_count = 0
-            max_debug = 10
+            # 5. 출력
+            info(f"\n✅ AI 선택 완료!")
+            info(f"   선택: {len(ai_response['selected'])}개 코인")
+            info(f"   신뢰도: {ai_response['ai_confidence'] * 100:.0f}%")
+            info(f"   프로토콜: {ai_response.get('protocol_version', 'v1.0')}")
+            info(f"   남은 크레딧: {credit_system.get_remaining()}/{credit_system.daily_limit}")
 
-            failed_reasons = {
-                'data_load_failed': 0,
-                'insufficient_data': 0,
-                'score_too_low': 0,
-                'exception': 0
-            }
-
-            # 2. 각 코인 분석
-            for i, coin in enumerate(all_coins):
-                try:
-                    # 데이터 로드 (blocking → async)
-                    df = await asyncio.to_thread(
-                        pyupbit.get_ohlcv,
-                        coin,
-                        interval="day",
-                        count=30
-                    )
-
-                    if df is None or len(df) == 0:
-                        failed_reasons['data_load_failed'] += 1
-                        if debug_count < max_debug:
-                            warning(f"❌ [{coin}] 데이터 로드 실패")
-                            debug_count += 1
-                        continue
-
-                    if len(df) < 30:
-                        failed_reasons['insufficient_data'] += 1
-                        if debug_count < max_debug:
-                            warning(f"❌ [{coin}] 데이터 부족 ({len(df)}일)")
-                            debug_count += 1
-                        continue
-
-                    # 점수 계산 (이건 그대로)
-                    score_result = self._calculate_coin_score(coin, df, market_sentiment)
-
-                    if score_result is None:
-                        failed_reasons['exception'] += 1
-                        continue
-
-                    score = score_result['total_score']
-
-                    if debug_count < max_debug:
-                        info(f"\n📊 [{coin}] 분석 결과:")
-                        info(f"   거래량: {score_result['volume']:,.0f}원 → {score_result['volume_score']}점")
-                        info(f"   변동성: {score_result['volatility'] * 100:.2f}% → {score_result['volatility_score']}점")
-                        info(f"   추세: {score_result['trend_score']}점")
-                        info(f"   총점: {score:.2f}점 (기준: {self.min_score})")
-                        debug_count += 1
-
-                    if score < self.min_score:
-                        failed_reasons['score_too_low'] += 1
-                        if debug_count < max_debug:
-                            warning(f"❌ [{coin}] 점수 미달 ({score:.2f} < {self.min_score})")
-                            debug_count += 1
-                        continue
-
-                    valid_coins.append({
-                        'symbol': coin,
-                        'score': score,
-                        'volume_24h': score_result['volume'],
-                        'volatility': score_result['volatility']
-                    })
-
-                except Exception as e:
-                    failed_reasons['exception'] += 1
-                    if debug_count < max_debug:
-                        error(f"❌ [{coin}] 예외: {type(e).__name__}: {str(e)}")
-                        debug_count += 1
-                    continue
-
-            # 3~7. 나머지는 그대로
-            # ... (통계, 정렬, 배분 로직 동일)
-
-            # 3. 스캔 결과 통계
-            info("\n" + "=" * 60)
-            info("📊 스캔 결과 통계")
-            info("=" * 60)
-            info(f"✅ 유효 코인: {len(valid_coins)}개")
-            info(f"❌ 실패 내역:")
-            info(f"   - 데이터 로드 실패: {failed_reasons['data_load_failed']}개")
-            info(f"   - 데이터 부족 (<30일): {failed_reasons['insufficient_data']}개")
-            info(f"   - 점수 미달 (<{self.min_score}): {failed_reasons['score_too_low']}개")
-            info(f"   - 예외 발생: {failed_reasons['exception']}개")
-            info(f"📊 총 분석: {len(all_coins)}개")
-            info("=" * 60)
-
-            if not valid_coins:
-                error("\n❌ 치명적 오류: 유효한 코인 0개")
-                error(f"   시장 감정: {market_sentiment}")
-                error(f"   최소 점수 기준: {self.min_score}")
-                return None
-
-            # 4. 점수 순 정렬
-            valid_coins.sort(key=lambda x: x['score'], reverse=True)
-
-            # 5. 상위 코인 출력
-            top_n = min(15, len(valid_coins))
-            info(f"\n📈 상위 {top_n}개 코인:")
-            for i, coin_info in enumerate(valid_coins[:top_n]):
-                info(f"  {i + 1}. {coin_info['symbol']}: {coin_info['score']:.2f}점 "
-                     f"(거래량: {coin_info['volume_24h'] / 1e9:.1f}억, "
-                     f"변동성: {coin_info['volatility'] * 100:.1f}%)")
-
-            # 6. 자금 배분
-            selected_coins = valid_coins[:self.max_coins]
-            allocation_ratios = [0.40, 0.30, 0.20, 0.10, 0.00]
-
-            allocations = {}
-            info(f"\n💰 자금 배분:")
-
-            for i, coin_info in enumerate(selected_coins):
-                ratio = allocation_ratios[i] if i < len(allocation_ratios) else 0
-                budget = self.total_budget * ratio
-
-                allocations[coin_info['symbol']] = {
-                    'budget': budget,
-                    'score': coin_info['score'],
-                    'rank': i + 1
-                }
-
-                info(f"   {coin_info['symbol']}: {budget:,.0f}원 ({ratio * 100:.0f}%)")
+            for coin in ai_response['selected']:
+                info(f"      🎯 {coin['ticker']}: {coin['allocation'] * 100:.0f}%")
 
             info("=" * 60 + "\n")
 
-            # 7. 반환
-            return {
-                'allocations': allocations,
-                'surge_coins': [],
-                'total_analyzed': len(valid_coins)
-            }
+            return ai_response
 
         except Exception as e:
-            error(f"\n❌ 포트폴리오 분석 치명적 오류: {str(e)}")
+            error(f"❌ AI 선택 오류: {e}")
             import traceback
             error(traceback.format_exc())
-            return None
+            return self._default_ai_selection(top_10_candidates)
 
+    def _build_ai_prompt(self, candidates):
+        """AI 프롬프트 작성 (압축 언어 버전)"""
 
-    def _calculate_coin_score(self, coin, df, market_sentiment):
-        """코인 점수 계산 (상세 로그 포함)"""
+        # 후보 요약 (압축)
+        candidates_text = "\n".join([
+            f"{i+1}. {c['ticker']}: S={c['score']:.1f} "
+            f"V24={c['volume_24h']/1e9:.1f}B Δ24={c['change_24h']:+.1f}% "
+            f"T={c['technical_score']:.1f} M={c['momentum']}"
+            for i, c in enumerate(candidates)
+        ])
+
+        prompt = f"""
+TASK: Select 3-5 coins from top 10 for portfolio (Budget: {self.total_budget:,} KRW)
+
+CANDIDATES:
+{candidates_text}
+
+REQUIREMENTS:
+1. Choose 3-5 coins
+2. Allocate % (total=100%)
+3. Risk diversification
+4. Max profit potential
+
+OUTPUT (JSON only):
+{{
+  "sel": [
+    {{"tkr": "KRW-BTC", "pct": 0.4, "why": "reason"}},
+    ...
+  ],
+  "strat": "overall strategy",
+  "conf": 0.85
+}}
+
+Use compressed language. Think step-by-step.
+"""
+        return prompt
+
+    def _parse_ai_response(self, consensus_text, candidates):
+        """AI 응답 파싱"""
         try:
-            score = 0
+            # JSON 추출
+            start = consensus_text.find('{')
+            end = consensus_text.rfind('}') + 1
+
+            if start == -1 or end == 0:
+                warning("⚠️ JSON 형식 없음")
+                return self._default_ai_selection(candidates)
+
+            json_str = consensus_text[start:end]
+            data = json.loads(json_str)
+
+            # 압축 형식 지원
+            selected_key = 'sel' if 'sel' in data else 'selected'
+            strategy_key = 'strat' if 'strat' in data else 'strategy'
+            conf_key = 'conf' if 'conf' in data else 'confidence'
+
+            selected = data.get(selected_key, [])
+
+            if not selected:
+                warning("⚠️ 선택 코인 없음")
+                return self._default_ai_selection(candidates)
+
+            # 변환
             result = {
-                'volume': 0,
-                'volume_score': 0,
-                'volatility': 0,
-                'volatility_score': 0,
-                'trend_score': 0,
-                'total_score': 0
+                'selected': [],
+                'ai_confidence': data.get(conf_key, 0.7),
+                'reasoning': data.get(strategy_key, 'AI 포트폴리오 전략'),
+                'protocol_version': self.ai_debate.protocol.version
             }
 
-            # 1. 거래량 점수 (0-30점)
-            if 'value' in df.columns:
-                volume_24h = df['value'].iloc[-1]
-                result['volume'] = volume_24h
+            total_allocation = 0.0
 
-                if volume_24h > 100_000_000_000:  # 1000억+
-                    result['volume_score'] = 30
-                elif volume_24h > 50_000_000_000:  # 500억+
-                    result['volume_score'] = 25
-                elif volume_24h > 10_000_000_000:  # 100억+
-                    result['volume_score'] = 20
-                elif volume_24h > 5_000_000_000:  # 50억+
-                    result['volume_score'] = 15
-                elif volume_24h > 1_000_000_000:  # 10억+
-                    result['volume_score'] = 10
-                else:
-                    result['volume_score'] = 5
+            for item in selected:
+                ticker = item.get('tkr') or item.get('ticker')
+                allocation = item.get('pct') or item.get('allocation', 0)
+                reasoning = item.get('why') or item.get('reasoning', '')
 
-            score += result['volume_score']
+                if ticker and allocation > 0:
+                    result['selected'].append({
+                        'ticker': ticker,
+                        'allocation': allocation,
+                        'reasoning': reasoning
+                    })
+                    total_allocation += allocation
 
-            # 2. 변동성 점수 (0-30점)
-            if 'high' in df.columns and 'low' in df.columns:
-                volatility = (df['high'] / df['low'] - 1).mean()
-                result['volatility'] = volatility
+            # 비율 정규화
+            if total_allocation > 0 and abs(total_allocation - 1.0) > 0.01:
+                for coin in result['selected']:
+                    coin['allocation'] /= total_allocation
 
-                if 0.02 < volatility < 0.10:  # 2-10% (이상적)
-                    result['volatility_score'] = 30
-                elif 0.01 < volatility < 0.15:  # 1-15%
-                    result['volatility_score'] = 20
-                elif 0.005 < volatility < 0.20:  # 0.5-20%
-                    result['volatility_score'] = 10
-                else:
-                    result['volatility_score'] = 5
-
-            score += result['volatility_score']
-
-            # 3. 추세 점수 (0-40점)
-            if 'close' in df.columns:
-                close = df['close']
-
-                # 이동평균
-                if len(close) >= 20:
-                    ma_20 = close.rolling(20).mean()
-
-                    if close.iloc[-1] > ma_20.iloc[-1]:
-                        result['trend_score'] += 20
-
-                    # 상승 추세
-                    if close.iloc[-1] > close.iloc[-5]:
-                        result['trend_score'] += 10
-
-                    # 강한 상승
-                    if close.iloc[-1] > close.iloc[-10]:
-                        result['trend_score'] += 10
-
-            score += result['trend_score']
-
-            result['total_score'] = score
             return result
 
         except Exception as e:
-            error(f"❌ [{coin}] 점수 계산 오류: {type(e).__name__}: {str(e)}")
+            warning(f"⚠️ AI 응답 파싱 실패: {e}")
+            return self._default_ai_selection(candidates)
+
+    def _default_ai_selection(self, candidates):
+        """기본 선택 (AI 없이)"""
+        info("⚙️ 기본 알고리즘 사용")
+
+        # 상위 3개 선택
+        top_3 = candidates[:3]
+
+        # 점수 비례 배분
+        total_score = sum(c['score'] for c in top_3)
+
+        result = {
+            'selected': [],
+            'ai_confidence': 0.6,
+            'reasoning': '기본 알고리즘: 점수 기반 상위 3개',
+            'protocol_version': 'v0.0 (No AI)'
+        }
+
+        for coin in top_3:
+            allocation = coin['score'] / total_score
+            result['selected'].append({
+                'ticker': coin['ticker'],
+                'allocation': allocation,
+                'reasoning': f"점수 {coin['score']:.1f}점"
+            })
+
+        return result
+
+    async def analyze_and_allocate(self, market_sentiment):
+        """
+        전체 시장 분석 + AI 자문 + 자금 배분
+
+        Returns:
+            {
+                'allocations': {
+                    'KRW-BTC': {
+                        'budget': 20000,
+                        'allocation': 0.4,
+                        'score': 85.5,
+                        'reasoning': '...'
+                    },
+                    ...
+                },
+                'total_analyzed': 200,
+                'ai_used': True,
+                'protocol_version': 'v1.2'
+            }
+        """
+        try:
+            info("\n" + "=" * 60)
+            info("💼 포트폴리오 분석 + AI 자문")
+            info("=" * 60)
+
+            # 1. 전체 시장 스캔 → 상위 10개
+            top_10 = await self.scan_all_coins()
+
+            if not top_10 or len(top_10) == 0:
+                error("❌ 유효한 후보 없음")
+                return None
+
+            # 2. AI 선택 (압축 언어 + 토론)
+            if AI_AVAILABLE and credit_system.get_remaining() >= 3:
+                ai_result = await self.ai_select_portfolio(top_10)
+            else:
+                warning("⚠️ AI 미사용 (크레딧 부족 또는 비활성)")
+                ai_result = self._default_ai_selection(top_10)
+
+            if not ai_result or not ai_result.get('selected'):
+                error("❌ AI 선택 실패")
+                return None
+
+            # 3. 예산 배분
+            allocations = {}
+
+            info(f"\n💰 자금 배분:")
+
+            for coin_info in ai_result['selected']:
+                ticker = coin_info['ticker']
+                allocation_pct = coin_info['allocation']
+                budget = int(self.total_budget * allocation_pct)
+
+                allocations[ticker] = {
+                    'budget': budget,
+                    'allocation': allocation_pct,
+                    'score': next((c['score'] for c in top_10 if c['ticker'] == ticker), 0),
+                    'reasoning': coin_info.get('reasoning', '')
+                }
+
+                info(f"   {ticker}: {budget:,}원 ({allocation_pct * 100:.0f}%)")
+                info(f"      → {coin_info.get('reasoning', 'N/A')}")
+
+            info("=" * 60 + "\n")
+
+            # 4. 반환
+            return {
+                'allocations': allocations,
+                'total_analyzed': len(top_10),
+                'ai_used': AI_AVAILABLE,
+                'ai_confidence': ai_result.get('ai_confidence', 0),
+                'protocol_version': ai_result.get('protocol_version', 'v0.0'),
+                'reasoning': ai_result.get('reasoning', '')
+            }
+
+        except Exception as e:
+            error(f"❌ 포트폴리오 분석 오류: {e}")
+            import traceback
+            error(traceback.format_exc())
             return None
-
-    def should_rebalance(self):
-        """
-        리밸런싱 필요 여부 판단
-
-        Returns:
-            bool: 리밸런싱 필요 여부
-        """
-        # TODO: 실제 포지션과 목표 배분 비교
-        # 지금은 간단히 True
-        return True
-
-    def get_allocation(self, ticker):
-        """
-        특정 코인의 배분 금액
-
-        Args:
-            ticker: 코인 티커
-
-        Returns:
-            int: 배분 금액
-        """
-        return self.allocations.get(ticker, 0)
-
-    def get_top_coins(self, n=5):
-        """
-        상위 N개 코인
-
-        Args:
-            n: 개수
-
-        Returns:
-            list: 티커 리스트
-        """
-        return list(self.allocations.keys())[:n]
 
 
 # ============================================================
@@ -707,18 +704,15 @@ class DynamicWorkerManager:
         return list(self.active_workers.keys())
 
 
-
-
-
 # ============================================================
 # 테스트
 # ============================================================
 
 async def test_portfolio_manager():
     """포트폴리오 매니저 테스트"""
-    print("🧪 포트폴리오 매니저 테스트\n")
+    print("🧪 AI 포트폴리오 매니저 테스트\n")
 
-    pm = PortfolioManager(total_budget=600000)
+    pm = PortfolioManager(total_budget=50000)
 
     # 가짜 시장 상태
     market_sentiment = {
@@ -731,9 +725,12 @@ async def test_portfolio_manager():
 
     if result:
         print("\n✅ 테스트 성공!")
-        print(f"   분석 코인: {result['analyzed_count']}개")
+        print(f"   분석 코인: {result['total_analyzed']}개")
         print(f"   배분 코인: {len(result['allocations'])}개")
-        print(f"   거래량 급증: {len(result['surge_coins'])}개")
+        print(f"   AI 사용: {'✅' if result['ai_used'] else '❌'}")
+        if result['ai_used']:
+            print(f"   신뢰도: {result['ai_confidence'] * 100:.0f}%")
+            print(f"   프로토콜: {result['protocol_version']}")
     else:
         print("\n❌ 테스트 실패")
 
