@@ -18,7 +18,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from datetime import datetime, timedelta
-from ai.protocol_pruning import protocol_pruner
+from ai.protocols.protocol_pruning import protocol_pruner
 from utils.logger import info, warning
 
 
